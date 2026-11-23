@@ -1,0 +1,22 @@
+{
+  "name": "3d-terrain-viewer",
+  "version": "1.0.0",
+  "description": "Full-screen 3D terrain viewer: open map layers on Mapterhorn terrain, SLF snow/avalanche data, sun shadows",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "check-layers": "node scripts/check-layers.mjs"
+  },
+  "dependencies": {
+    "maplibre-gl": "^6.19.0",
+    "suncalc": "^2.1.4"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8",
+    "vite-plugin-singlefile": "^2.3.4"
+  }
+}

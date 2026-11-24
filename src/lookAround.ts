@@ -42,6 +42,7 @@ export function enableLookAround(map: maplibregl.Map): LookAround {
   // accurate, and stays valid because every other gesture first returns to an ordinary view.
   let eye: Eye | null = null;
   let turning = false;
+  let lookMode = false; // plain drag turns the camera (touch screens have no Shift key)
   let flightToken = 0; // a flight in progress stops when this changes
 
   function focalLength(): number {
@@ -120,7 +121,7 @@ export function enableLookAround(map: maplibregl.Map): LookAround {
   canvas.addEventListener(
     'mousedown',
     (event) => {
-      if (!event.shiftKey || event.button !== 0) return;
+      if (!(event.shiftKey || lookMode) || event.button !== 0) return;
       event.preventDefault();
       event.stopPropagation(); // keep MapLibre's own drag handlers out
       if (map.getZoom() < MIN_ZOOM) return;
@@ -148,9 +149,57 @@ export function enableLookAround(map: maplibregl.Map): LookAround {
     anchor();
   }
 
+  // Touch has no Shift key: with look mode on (the eye button), one finger turns the camera.
+  canvas.addEventListener(
+    'touchstart',
+    (event) => {
+      if (!lookMode || event.touches.length !== 1 || map.getZoom() < MIN_ZOOM) return;
+      event.preventDefault();
+      event.stopPropagation();
+      map.stop();
+      flightToken++;
+      release();
+      const touch = event.touches[0];
+      drag = { x: touch.clientX, y: touch.clientY, bearing: map.getBearing(), pitch: map.getPitch() };
+      const move = (e: TouchEvent) => {
+        if (!drag || !eye || !e.touches.length) return;
+        e.preventDefault();
+        turn(eye, drag.bearing - (e.touches[0].clientX - drag.x) * DEGREES_PER_PIXEL, drag.pitch + (e.touches[0].clientY - drag.y) * DEGREES_PER_PIXEL);
+      };
+      const end = () => {
+        window.removeEventListener('touchmove', move);
+        window.removeEventListener('touchend', end);
+        window.removeEventListener('touchcancel', end);
+        drag = null;
+        anchor();
+      };
+      window.addEventListener('touchmove', move, { passive: false });
+      window.addEventListener('touchend', end);
+      window.addEventListener('touchcancel', end);
+    },
+    { capture: true, passive: false },
+  );
+
+  // A button for it, with the other map controls.
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'look-mode';
+  button.title = 'Look around: drag turns the camera in place (same as Shift+drag)';
+  button.textContent = '👁';
+  button.addEventListener('click', () => {
+    lookMode = !lookMode;
+    button.classList.toggle('on', lookMode);
+    if (!lookMode) anchor(true);
+  });
+  const group = document.createElement('div');
+  group.className = 'maplibregl-ctrl maplibregl-ctrl-group';
+  group.append(button);
+  map.addControl({ onAdd: () => group, onRemove: () => group.remove() }, 'top-right');
+
   // Any ordinary gesture needs the centre on the ground first (capture: before MapLibre handles it).
   const settle = (event: Event) => {
-    if (eye && !drag && !(event instanceof MouseEvent && event.shiftKey && event.button === 0)) anchor(true);
+    const looking = lookMode && (event.type === 'touchstart' || (event instanceof MouseEvent && event.button === 0));
+    if (eye && !drag && !looking && !(event instanceof MouseEvent && event.shiftKey && event.button === 0)) anchor(true);
   };
   for (const type of ['wheel', 'mousedown', 'touchstart', 'dblclick']) canvas.addEventListener(type, settle, true);
   map.getContainer().addEventListener('keydown', settle, true);

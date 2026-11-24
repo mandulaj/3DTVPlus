@@ -28,7 +28,7 @@ const EARTH_RADIUS = 6371008;
 const CIRCUMFERENCE = 40075016.686;
 const PENUMBRA = Math.tan((0.35 * Math.PI) / 180); // sun half-width, slightly softened
 const GRAZING = 0.14; // cosine of incidence below which a slope starts to darken
-const CACHE_LIMIT = 60;
+const CACHE_LIMIT = 40; // one tile needs up to 36
 const SHADOW_RGB = [10, 16, 48]; // cool, dark
 const SUNLIT_RGB = [255, 214, 140]; // warm tint on ground the sun reaches
 const SUNLIT_ALPHA = 0.18;
@@ -159,7 +159,7 @@ async function buildLevel(demUrl: string, z: number, x: number, y: number, k: nu
   return { grid, ...offsets };
 }
 const mosaicCache = new Map<string, Float32Array>();
-const MOSAIC_CACHE_LIMIT = 16;
+const MOSAIC_CACHE_LIMIT = 8;
 
 /**
  * Shadow state of one mosaic: for every cell the height of the shadow surface arriving from
@@ -176,7 +176,7 @@ const scratchDistance = new Float32Array(MOSAIC * MOSAIC);
 const scratchShade = new Float32Array(N * N);
 const NONE = -20000; // "no shadow surface here"
 const fieldCache = new Map<string, Field>();
-const FIELD_CACHE_LIMIT = 8;
+const FIELD_CACHE_LIMIT = 4;
 
 interface Sun {
   dirX: number; // toward the sun, grid axes (+x east, +y south)

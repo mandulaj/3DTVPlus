@@ -9,6 +9,14 @@
 type Point = [lng: number, lat: number];
 const RAD = Math.PI / 180;
 const MAX_HOOKS = 10;
+// Leaving the clicked spot for a place further along costs more than walking there on the line:
+// otherwise the path may start a little way ahead of the click.
+const OFF_LINE_COST = 3;
+const SAME_GROUND = 3; // metres
+const JUNCTION_REACH = 4; // metres: a line ending this close to another line joins it
+// Grid for finding the segments near a point without scanning all of them.
+const CELL_LNG = 0.0008;
+const CELL_LAT = 0.0005; // about 55 m
 
 function metres(a: Point, b: Point): number {
   const s = Math.sin(((b[1] - a[1]) * RAD) / 2) ** 2 + Math.cos(a[1] * RAD) * Math.cos(b[1] * RAD) * Math.sin(((b[0] - a[0]) * RAD) / 2) ** 2;
@@ -32,6 +40,7 @@ export class Network {
   /** Every distinct segment once, as a pair of node ids. */
   private segmentA: number[] = [];
   private segmentB: number[] = [];
+  private grid = new Map<string, number[]>();
 
   constructor(lines: Point[][]) {
     const ids = new Map<string, number>();
@@ -63,6 +72,46 @@ export class Network {
         previous = current;
       }
     }
+    for (let i = 0; i < this.segmentA.length; i++) this.index(i);
+
+    // T-junctions: a line that ends on another line's segment, between its vertices, joins it there.
+    const count = this.nodes.length;
+    for (let node = 0; node < count; node++) {
+      if (this.neighbours[node].length !== 1) continue; // only loose ends
+      const hook = this.hooks(this.nodes[node], JUNCTION_REACH).find((h) => h.a !== node && h.b !== node);
+      if (!hook) continue;
+      this.connect(node, hook.a, hook.off + hook.toA);
+      this.connect(node, hook.b, hook.off + hook.toB);
+    }
+  }
+
+  private connect(a: number, b: number, length: number): void {
+    if (a === b || this.neighbours[a].includes(b)) return;
+    this.neighbours[a].push(b);
+    this.lengths[a].push(length);
+    this.neighbours[b].push(a);
+    this.lengths[b].push(length);
+    this.segmentA.push(a);
+    this.segmentB.push(b);
+    this.index(this.segmentA.length - 1);
+  }
+
+  /** Enter a segment into every grid cell its bounding box touches. */
+  private index(segment: number): void {
+    const a = this.nodes[this.segmentA[segment]];
+    const b = this.nodes[this.segmentB[segment]];
+    const x0 = Math.floor(Math.min(a[0], b[0]) / CELL_LNG);
+    const x1 = Math.floor(Math.max(a[0], b[0]) / CELL_LNG);
+    const y0 = Math.floor(Math.min(a[1], b[1]) / CELL_LAT);
+    const y1 = Math.floor(Math.max(a[1], b[1]) / CELL_LAT);
+    for (let x = x0; x <= x1; x++) {
+      for (let y = y0; y <= y1; y++) {
+        const key = `${x},${y}`;
+        const cell = this.grid.get(key);
+        if (cell) cell.push(segment);
+        else this.grid.set(key, [segment]);
+      }
+    }
   }
 
   get isEmpty(): boolean {
@@ -75,7 +124,19 @@ export class Network {
     const dLat = reach / 111000;
     const dLng = dLat / scale;
     const found: Hook[] = [];
-    for (let i = 0; i < this.segmentA.length; i++) {
+    const seen = new Set<number>();
+    const candidates: number[] = [];
+    for (let x = Math.floor((p[0] - dLng) / CELL_LNG); x <= Math.floor((p[0] + dLng) / CELL_LNG); x++) {
+      for (let y = Math.floor((p[1] - dLat) / CELL_LAT); y <= Math.floor((p[1] + dLat) / CELL_LAT); y++) {
+        for (const segment of this.grid.get(`${x},${y}`) ?? []) {
+          if (!seen.has(segment)) {
+            seen.add(segment);
+            candidates.push(segment);
+          }
+        }
+      }
+    }
+    for (const i of candidates) {
       const a = this.nodes[this.segmentA[i]];
       const b = this.nodes[this.segmentB[i]];
       // Cheap rejection before the exact distance.
@@ -88,7 +149,10 @@ export class Network {
       const off = metres(p, on);
       if (off <= reach) found.push({ on, a: this.segmentA[i], b: this.segmentB[i], toA: metres(on, a), toB: metres(on, b), off });
     }
-    return found.sort((x, y) => x.off - y.off).slice(0, MAX_HOOKS);
+    found.sort((x, y) => x.off - y.off);
+    // Several hooks are for lines lying on top of each other, which are all about equally near.
+    // Anything clearly further away is a different place, not an alternative.
+    return found.filter((hook) => hook.off <= found[0].off + SAME_GROUND).slice(0, MAX_HOOKS);
   }
 
   /** Path from `a` to `b` along the lines, if both lie within `reach` metres of one. */
@@ -102,7 +166,7 @@ export class Network {
     for (const s of starts) {
       for (const e of ends) {
         if (!((s.a === e.a && s.b === e.b) || (s.a === e.b && s.b === e.a))) continue;
-        const length = s.off + metres(s.on, e.on) + e.off;
+        const length = (s.off + e.off) * OFF_LINE_COST + metres(s.on, e.on);
         if (!best || length < best.length) best = { length, path: [s.on, e.on] };
       }
     }
@@ -121,12 +185,12 @@ export class Network {
       heap.push(d, node);
     };
     starts.forEach((s, i) => {
-      reachNode(s.a, s.off + s.toA, -1, i);
-      reachNode(s.b, s.off + s.toB, -1, i);
+      reachNode(s.a, s.off * OFF_LINE_COST + s.toA, -1, i);
+      reachNode(s.b, s.off * OFF_LINE_COST + s.toB, -1, i);
     });
     const finish = new Map<number, { tail: number; hook: Hook }>();
     for (const e of ends) {
-      for (const [node, tail] of [[e.a, e.toA + e.off], [e.b, e.toB + e.off]] as [number, number][]) {
+      for (const [node, tail] of [[e.a, e.toA + e.off * OFF_LINE_COST], [e.b, e.toB + e.off * OFF_LINE_COST]] as [number, number][]) {
         if (!finish.has(node) || tail < finish.get(node)!.tail) finish.set(node, { tail, hook: e });
       }
     }

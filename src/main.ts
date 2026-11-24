@@ -7,7 +7,7 @@ import { PeakLabels } from './peaks';
 import { Planner } from './planner';
 import { enableContextMenu } from './contextMenu';
 import { decodeShare, decodeTrack, encodeShare, encodeTrack, type SharedView } from './share';
-import { parseTrack } from './tracks';
+import { parseTrack } from './trackFiles';
 import { DEFAULT_BASE, byId } from './layers/catalog';
 import { LayerManager } from './layers/manager';
 import { SNOW_PRODUCTS, STATION_TYPES, SlfLayers, type SnowProduct, type StationType } from './layers/slf';
@@ -15,6 +15,7 @@ import { SunController } from './sun/sun';
 import { Panel, type SlfState, type TerrainState } from './ui/panel';
 import { SunControls } from './ui/sunControls';
 import { toast } from './ui/dom';
+import { unofficial } from './unofficial';
 import { enableRouteInfo } from './layers/routes';
 import { Skitourenguru } from './layers/skitourenguru';
 import { SAC_DISCIPLINES, SacRoutes, type SacDiscipline } from './layers/sac';
@@ -112,7 +113,20 @@ map.once('load', async () => {
   panel.onPeaks = (on) => peaks.setEnabled(on);
   if (terrain.peaks) peaks.setEnabled(true);
   const tracks = enableTrackDrop(map, document.getElementById('panel')!);
-  const planner = new Planner(map, { network: () => sac.routable(), snow: () => slf.snowSampler(), onSave: (name, coords) => tracks.add(name, coords), onUpdate: (id, name, coords) => tracks.update(id, name, coords),
+  const planner = new Planner(map, { network: () => sac.routable(), snow: () => slf.snowSampler(),
+    danger: () => slf.dangerSampler(),
+    requestSnow: () => {
+      if (!slfState.snow) slfState.snow = 'hs';
+      void slf.setSnowMap(slfState.snow, slfState.snowDate || undefined, slfState.snowOpacity);
+      panel.syncSlf();
+      saveState();
+    },
+    requestDanger: () => {
+      slfState.bulletin = true;
+      void slf.setBulletin(true, slfState.bulletinOpacity);
+      panel.syncSlf();
+      saveState();
+    }, onSave: (name, coords) => tracks.add(name, coords), onUpdate: (id, name, coords) => tracks.update(id, name, coords),
     onShare: (name, coords) => void shareTrack(name, coords),
     // A shared track belongs to the link it came with, not to the map view left behind.
     onClose: () => writeHash({ track: null, tn: null, gpx: null }),
@@ -120,8 +134,9 @@ map.once('load', async () => {
   tracks.onShare = (name, coords) => void shareTrack(name, coords);
   void openSharedTrack(planner);
   tracks.onEdit = (id, name, coords) => planner.load(name, coords, id);
-  tracks.onView = (id, name, coords) => planner.view(name, coords, id);
+  tracks.onView = (id, name, coords, recorded) => planner.view(name, coords, id, recorded);
   slf.onSnowChange = () => planner.refresh();
+  slf.onBulletinChange = () => planner.refresh();
   enableContextMenu(map, slf.popup, planner, look);
   Object.assign(window, { planner });
   panel.onPlan = () => (planner.isOpen ? planner.close() : planner.open());
@@ -137,8 +152,10 @@ map.once('load', async () => {
   if (slfState.bulletin) void slf.setBulletin(true, slfState.bulletinOpacity);
   if (slfState.stations) void slf.setStations(slfState.stations);
   if (slfState.avalanches) void slf.setAvalanches(true);
+  // Unofficial data only if this browser's user opted in: a link from someone else must not switch it on.
+  if (!unofficial.enabled) slfState.guru = false;
   if (slfState.guru) void guru.setEnabled(true);
-  sac.setDisciplines((hash.get('sac') ?? '').split(',').filter((d): d is SacDiscipline => d in SAC_DISCIPLINES));
+  if (unofficial.enabled) sac.setDisciplines((hash.get('sac') ?? '').split(',').filter((d): d is SacDiscipline => d in SAC_DISCIPLINES));
   panel.syncSac();
   if (hash.get('sun')) sunControls.setEnabled(true);
 

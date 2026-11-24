@@ -19,7 +19,9 @@ let nextId = 1;
 
 function ensureWorkers(): void {
   if (workers.length) return;
-  const count = Math.max(1, Math.min(4, Math.floor((navigator.hardwareConcurrency || 4) / 2)));
+  // Each worker holds its own elevation caches (roughly 100 MB): fewer of them on machines with little memory.
+  const memory = (navigator as { deviceMemory?: number }).deviceMemory ?? 8;
+  const count = Math.max(1, Math.min(memory <= 4 ? 2 : 3, Math.floor((navigator.hardwareConcurrency || 4) / 2)));
   workers = Array.from({ length: count }, () => {
     const worker = new ShadowWorker();
     worker.onmessage = (event: MessageEvent<ShadowResponse>) => {
@@ -39,6 +41,18 @@ function ensureWorkers(): void {
     };
     return worker;
   });
+}
+
+/** Sunlight switched off: give the workers' memory back. They start again on the next shadow tile. */
+export function releaseShadowWorkers(): void {
+  for (const worker of workers) worker.terminate();
+  workers = [];
+  for (const entry of pending.values()) {
+    const error = new Error('aborted');
+    error.name = 'AbortError';
+    entry.reject(error);
+  }
+  pending.clear();
 }
 
 export function registerShadowProtocol(): void {

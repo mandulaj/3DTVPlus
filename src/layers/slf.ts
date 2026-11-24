@@ -15,8 +15,16 @@ export interface ColorScale {
 export interface SnowSampler {
   name: string;
   unit: string;
+  /** Whether the snow map is on the map right now (its data is kept after it is switched off). */
+  shown: boolean;
   /** Value and class colour at a point; null where the map has no data. */
   at(lng: number, lat: number): { value: number; colour: string } | null;
+}
+
+/** Reads the avalanche bulletin shown on the map at single points (for the route profile). */
+export interface DangerSampler {
+  /** Danger level of the bulletin region at a point; null outside the bulletin area or without a rating. */
+  at(lng: number, lat: number): { level: number; name: string; colour: string; region: string; bands: { from: number; to: number }[] } | null;
 }
 
 export interface Legend {
@@ -131,6 +139,7 @@ export class SlfLayers {
 
   /** Told whenever the snow map shown changes (another product, date, or none). */
   onSnowChange: () => void = () => {};
+  private snowShown = false;
   private snowGrid: { bytes: Uint8Array; mask: Uint8Array; width: number; height: number; extent: number[]; scale: ColorScale; name: string } | null = null;
 
   /** The snow map on screen as numbers, or null if none is shown. */
@@ -144,6 +153,7 @@ export class SlfLayers {
     return {
       name: grid.name,
       unit: scale.unit,
+      shown: this.snowShown,
       at: (lng, lat) => {
         const x = (lng * Math.PI * R) / 180;
         const y = Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360)) * R;
@@ -160,10 +170,9 @@ export class SlfLayers {
 
   async setSnowMap(product: SnowProduct | null, date?: string, opacity = 0.75): Promise<void> {
     const token = ++this.snowToken;
-    if (this.snowGrid) {
-      this.snowGrid = null;
-      this.onSnowChange();
-    }
+    // The last map's values stay available (for a route profile coloured by them) until another one loads.
+    this.snowShown = false;
+    this.onSnowChange();
     this.removeLayerAndSource('slf-snow');
     if (this.snowUrl) URL.revokeObjectURL(this.snowUrl);
     this.snowUrl = null;
@@ -188,6 +197,7 @@ export class SlfLayers {
       const { blob, bytes, mask, width, height } = await this.colorize(await response.blob(), scale);
       if (token !== this.snowToken) return;
       this.snowGrid = { bytes, mask, width, height, extent, scale, name: spec.name };
+      this.snowShown = true;
       this.onSnowChange();
 
       const [minX, minY, maxX, maxY] = extent;
@@ -263,8 +273,53 @@ export class SlfLayers {
 
   // ───────────── Avalanche bulletin ─────────────
 
+  /** Told whenever the bulletin shown changes (loaded or switched off). */
+  onBulletinChange: () => void = () => {};
+  private bulletinRegions: { box: number[]; rings: number[][][][]; properties: Record<string, any> }[] | null = null;
+
+  /** The bulletin on screen as a lookup by position, or null if it is not shown. */
+  dangerSampler(): DangerSampler | null {
+    const regions = this.bulletinRegions;
+    if (!regions) return null;
+    let last: (typeof regions)[number] | null = null; // neighbouring samples are usually in the same region
+    const inside = (region: (typeof regions)[number], lng: number, lat: number) => {
+      const [minX, minY, maxX, maxY] = region.box;
+      if (lng < minX || lng > maxX || lat < minY || lat > maxY) return false;
+      // Inside one of the polygons: within its outer ring and not in a hole (even-odd over all rings).
+      return region.rings.some((polygon) => {
+        let hit = false;
+        for (const ring of polygon) {
+          for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+            const [xi, yi] = ring[i];
+            const [xj, yj] = ring[j];
+            if (yi > lat !== yj > lat && lng < ((xj - xi) * (lat - yi)) / (yj - yi) + xi) hit = !hit;
+          }
+        }
+        return hit;
+      });
+    };
+    return {
+      at: (lng, lat) => {
+        const region = last && inside(last, lng, lat) ? last : (regions.find((r) => inside(r, lng, lat)) ?? null);
+        if (!region) return null;
+        last = region;
+        const p = region.properties;
+        const rating = (p.dangerRatings ?? [])[0];
+        const danger = DANGER[rating?.mainValue];
+        if (!danger) return null;
+        // Altitude ranges the avalanche problems are described for ("above 2200 m").
+        const bands = ((p.avalancheProblems ?? []) as any[])
+          .map((a) => ({ from: Number(a.elevation?.lowerBound), to: Number(a.elevation?.upperBound) }))
+          .map((b) => ({ from: Number.isFinite(b.from) ? b.from : -Infinity, to: Number.isFinite(b.to) ? b.to : Infinity }))
+          .filter((b) => Number.isFinite(b.from) || Number.isFinite(b.to));
+        return { level: danger.level, name: pretty(rating.mainValue), colour: danger.color, region: (p.regions ?? []).map((r: any) => r.name).join(', '), bands };
+      },
+    };
+  }
+
   async setBulletin(on: boolean, opacity = 0.45): Promise<void> {
     this.removeLayerAndSource('slf-bulletin', ['slf-bulletin-line']);
+    // The regions stay available after the layer is switched off (for a route profile coloured by them).
     this.onLegend('bulletin', null);
     if (!on) return;
     try {
@@ -273,6 +328,22 @@ export class SlfLayers {
         return r.json();
       });
       if (this.map.getSource('slf-bulletin')) return;
+      this.bulletinRegions = (data.features as any[])
+        .filter((f) => f.geometry?.type === 'Polygon' || f.geometry?.type === 'MultiPolygon')
+        .map((f) => {
+          const rings: number[][][][] = f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates;
+          const box = [Infinity, Infinity, -Infinity, -Infinity];
+          for (const polygon of rings) {
+            for (const [x, y] of polygon[0]) {
+              if (x < box[0]) box[0] = x;
+              if (y < box[1]) box[1] = y;
+              if (x > box[2]) box[2] = x;
+              if (y > box[3]) box[3] = y;
+            }
+          }
+          return { box, rings, properties: f.properties ?? {} };
+        });
+      this.onBulletinChange();
       const withRating = data.features.find((f: any) => f.properties?.validTime);
       this.map.addSource('slf-bulletin', { type: 'geojson', data, attribution: `${SLF_ATTRIBUTION} avalanche bulletin (CC BY 4.0)` });
       this.map.addLayer(

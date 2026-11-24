@@ -6,6 +6,7 @@ import type { Skitourenguru } from '../layers/skitourenguru';
 import { PRESETS, type Preset } from '../layers/presets';
 import { SNOW_PRODUCTS, STATION_TYPES, type Legend, type SlfLayers, type SnowProduct, type StationType } from '../layers/slf';
 import { WATER_LAYERS } from '../map';
+import { unofficial } from '../unofficial';
 import { h, slider } from './dom';
 
 export interface SlfState {
@@ -115,12 +116,33 @@ export class Panel {
     );
     this.syncSlf();
     this.root.append(toggle, body, this.legendBox);
+    // On a phone the map comes first: the layer panel opens on demand.
+    if (window.matchMedia('(max-width: 700px)').matches) this.root.classList.add('collapsed');
   }
 
   // ── SAC routes ──
 
+  private sacBody = h('div', { class: 'section-body sac-body' });
+  private settingsSection: HTMLElement | null = null;
+
   private buildSac(): HTMLElement {
     this.sac.onHint = (hint) => (this.sacHint.textContent = hint ?? '');
+    this.renderSac();
+    const wrapper = section('Routes (SAC route portal)', false);
+    wrapper.querySelector('.section-body')?.replaceWith(this.sacBody);
+    return wrapper;
+  }
+
+  /** The discipline checkboxes, or the invitation to switch unofficial data on. */
+  private renderSac(): void {
+    this.sacBoxes.clear();
+    if (!unofficial.enabled) {
+      this.sacBody.replaceChildren(
+        h('div', { class: 'muted' }, 'Route lines from the SAC route portal are SAC content without an open licence. They are loaded from SAC only if you switch unofficial data on.'),
+        h('button', { type: 'button', class: 'wide plan-button', onclick: () => this.showSettings() }, 'Open Settings'),
+      );
+      return;
+    }
     const rows = (Object.entries(SAC_DISCIPLINES) as [SacDiscipline, { name: string; colour: string }][]).map(([id, discipline]) => {
       const swatch = h('i', { class: 'swatch' });
       swatch.style.background = discipline.colour;
@@ -135,7 +157,26 @@ export class Panel {
       this.sacBoxes.set(id, box);
       return h('label', { class: 'row' }, box, swatch, h('span', {}, discipline.name));
     });
-    return section('Routes (SAC route portal)', false, ...rows, this.sacHint, h('div', { class: 'muted' }, 'Click a route for difficulty and a link to its SAC page. Switzerland and nearby, from zoom 10.'));
+    this.sacBody.replaceChildren(...rows, this.sacHint, h('div', { class: 'muted' }, 'Click a route for difficulty and a link to its SAC page. Switzerland and nearby, from zoom 10.'));
+  }
+
+  private showSettings(): void {
+    if (!this.settingsSection) return;
+    (this.settingsSection as HTMLDetailsElement).open = true;
+    this.settingsSection.scrollIntoView({ block: 'nearest' });
+  }
+
+  /** Unofficial data switched on or off in Settings. */
+  private setUnofficial(on: boolean): void {
+    unofficial.enabled = on;
+    if (!on) {
+      this.sac.setDisciplines([]);
+      this.slfState.guru = false;
+      void this.guru.setEnabled(false);
+    }
+    this.renderSac();
+    this.syncOverlay(GURU_PARENT);
+    this.onStateChange();
   }
 
   syncSac(): void {
@@ -177,7 +218,7 @@ export class Panel {
     s.avalanches = preset.slf?.avalanches ?? false;
     s.guru = false;
     void this.guru.setEnabled(false);
-    this.sac.setDisciplines(preset.sac ?? []);
+    this.sac.setDisciplines(unofficial.enabled ? (preset.sac ?? []) : []);
     this.syncSac();
     void this.slf.setSnowMap(s.snow || null, undefined, s.snowOpacity);
     void this.slf.setBulletin(s.bulletin, s.bulletinOpacity);
@@ -278,7 +319,7 @@ export class Panel {
     row.extra.append(slider(state.opacity, 0, 1, 0.05, (v) => this.layers.setOverlayOpacity(id, v), 'Opacity'));
     const control = paramControl(def, state.param, (value) => void this.layers.setOverlayParam(id, value));
     if (control) row.extra.append(control);
-    if (id === GURU_PARENT) {
+    if (id === GURU_PARENT && unofficial.enabled) {
       const s = this.slfState;
       const box = h('input', {
         type: 'checkbox',
@@ -490,15 +531,18 @@ export class Panel {
       });
       return [h('label', { class: 'row' }, h('span', {}, `${KEY_PROVIDERS[provider].name} API key`)), field];
     });
-    return section(
+    const unofficialBox = h('input', { type: 'checkbox', checked: unofficial.enabled, onchange: () => this.setUnofficial(unofficialBox.checked) });
+    return (this.settingsSection = section(
       'Settings',
       false,
+      h('label', { class: 'row' }, unofficialBox, h('span', {}, 'Show unofficial third-party data')),
+      h('div', { class: 'muted' }, 'SAC route portal lines and Skitourenguru risk ratings. This is their content, fetched live from their servers; no licence has been granted for showing it here. Off unless you switch it on in this browser.'),
       ...keys,
       h('div', { class: 'muted' }, 'Keys are stored in this browser only; they are not part of the shared URL.'),
       h('label', { class: 'row' }, h('span', {}, 'CORS proxy prefix')),
       input,
       h('div', { class: 'muted' }, 'Only for layers marked "proxy" (SLF terrain maps). The tile URL is appended to this prefix. Not needed under "npm run dev".'),
-    );
+    ));
   }
 
   // ── Legends ──

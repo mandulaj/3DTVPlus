@@ -3,7 +3,7 @@ import type * as maplibregl from 'maplibre-gl';
 import type { GeoJSONSource, RasterTileSource } from 'maplibre-gl';
 import * as SunCalc from 'suncalc';
 import { SLOT } from '../map';
-import { registerShadowProtocol, shadowStats } from './shadowProtocol';
+import { registerShadowProtocol, releaseShadowWorkers, shadowStats } from './shadowProtocol';
 import { SunDisc } from './sunDisc';
 import { nightPolygon } from './terminator';
 
@@ -78,6 +78,7 @@ export class SunController {
       this.applied = { azimuth: NaN, altitude: NaN };
       this.resetRelief();
       this.disc.hide();
+      releaseShadowWorkers();
     }
   }
 

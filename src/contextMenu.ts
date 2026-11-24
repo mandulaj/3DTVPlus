@@ -2,7 +2,7 @@
 import type * as maplibregl from 'maplibre-gl';
 import { elevations } from './elevation';
 import { interaction } from './interaction';
-import { toLv95 } from './layers/sac';
+import { toLv95 } from './swissGrid';
 import type { LookAround } from './lookAround';
 import { placeName } from './places';
 import type { Planner } from './planner';
@@ -28,6 +28,45 @@ export function enableContextMenu(map: maplibregl.Map, popup: maplibregl.Popup, 
     open(map.unproject([event.clientX - box.left, event.clientY - box.top]));
   });
   canvas.addEventListener('contextmenu', (event) => event.preventDefault());
+
+  // Touch: a long press on one spot does the same. The popup opens when the finger lifts: lifting
+  // also counts as a tap on the map, which would close a popup opened earlier.
+  let hold: number | undefined;
+  let held: { x: number; y: number; long: boolean } | null = null;
+  const cancel = () => {
+    clearTimeout(hold);
+    held = null;
+  };
+  canvas.addEventListener(
+    'touchstart',
+    (event) => {
+      cancel();
+      if (event.touches.length !== 1 || interaction.drawing) return;
+      const press = { x: event.touches[0].clientX, y: event.touches[0].clientY, long: false };
+      held = press;
+      hold = window.setTimeout(() => {
+        press.long = true;
+        navigator.vibrate?.(15); // a nudge that the press registered, where supported
+      }, 550);
+    },
+    { passive: true },
+  );
+  canvas.addEventListener(
+    'touchmove',
+    (event) => {
+      if (held && Math.hypot(event.touches[0].clientX - held.x, event.touches[0].clientY - held.y) > 8) cancel();
+    },
+    { passive: true },
+  );
+  canvas.addEventListener('touchend', () => {
+    const press = held;
+    cancel();
+    if (!press?.long) return;
+    const box = canvas.getBoundingClientRect();
+    const lngLat = map.unproject([press.x - box.left, press.y - box.top]);
+    window.setTimeout(() => open(lngLat), 120);
+  });
+  canvas.addEventListener('touchcancel', cancel);
 
   function open(lngLat: maplibregl.LngLat): void {
     const token = ++request;

@@ -1,10 +1,9 @@
 // Drag and drop of recorded tracks (GPX, TCX, FIT): parsed in the browser, drawn on the terrain.
 import * as maplibregl from 'maplibre-gl';
 import { SLOT } from './map';
+import { readTrack, type Point, type Recording, type Segments } from './trackFiles';
 import { h, toast } from './ui/dom';
 
-type Point = [lng: number, lat: number];
-type Segments = Point[][];
 
 const STORAGE_KEY = 'terrain-viewer.tracks';
 const START_COLOUR = '#2fbf5b';
@@ -45,140 +44,8 @@ const listening = new WeakSet<maplibregl.Map>();
 
 const COLOURS = ['#e5007d', '#0a84ff', '#ff7a00', '#7b2ff7', '#00a36c', '#d4002a'];
 
-// ── parsers ──
-
-function parseXml(text: string, pointTags: string[], read: (el: Element) => Point | null, segmentTag: string): Segments {
-  const doc = new DOMParser().parseFromString(text, 'application/xml');
-  if (doc.querySelector('parsererror')) throw new Error('not valid XML');
-  const collect = (root: Element | Document, tag: string): Point[] =>
-    [...root.getElementsByTagNameNS('*', tag)].map(read).filter((p): p is Point => p !== null);
-  for (const tag of pointTags) {
-    const groups = [...doc.getElementsByTagNameNS('*', segmentTag)].map((seg) => collect(seg, tag)).filter((s) => s.length > 1);
-    if (groups.length) return groups;
-    const all = collect(doc, tag);
-    if (all.length > 1) return [all];
-  }
-  return [];
-}
-
-const valid = (lng: number, lat: number) => Number.isFinite(lng) && Number.isFinite(lat) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180;
-
-function parseGpx(text: string): Segments {
-  // Recorded track first, then a planned route, then loose waypoints.
-  return parseXml(
-    text,
-    ['trkpt', 'rtept', 'wpt'],
-    (el) => {
-      const lng = Number(el.getAttribute('lon'));
-      const lat = Number(el.getAttribute('lat'));
-      return el.hasAttribute('lon') && valid(lng, lat) ? [lng, lat] : null;
-    },
-    'trkseg',
-  );
-}
-
-function parseTcx(text: string): Segments {
-  return parseXml(
-    text,
-    ['Trackpoint'],
-    (el) => {
-      const value = (tag: string) => el.getElementsByTagNameNS('*', tag)[0]?.textContent;
-      const lng = Number(value('LongitudeDegrees') ?? NaN);
-      const lat = Number(value('LatitudeDegrees') ?? NaN);
-      return valid(lng, lat) ? [lng, lat] : null;
-    },
-    'Track',
-  );
-}
-
-/** Minimal FIT reader: positions from "record" messages, everything else skipped. */
-function parseFit(buffer: ArrayBuffer): Segments {
-  const view = new DataView(buffer);
-  const RECORD = 20;
-  const SEMICIRCLE = 180 / 2 ** 31;
-  const points: Point[] = [];
-  let offset = 0;
-
-  // A file can hold several FIT files back to back.
-  while (offset + 12 <= view.byteLength) {
-    const headerSize = view.getUint8(offset);
-    const dataSize = view.getUint32(offset + 4, true);
-    if (String.fromCharCode(...new Uint8Array(buffer, offset + 8, 4)) !== '.FIT') {
-      if (offset === 0) throw new Error('not a FIT file');
-      break;
-    }
-    let p = offset + headerSize;
-    const end = Math.min(p + dataSize, view.byteLength);
-    interface Definition {
-      global: number;
-      little: boolean;
-      fields: { number: number; size: number }[];
-      size: number;
-    }
-    const definitions = new Map<number, Definition>();
-
-    while (p < end) {
-      const header = view.getUint8(p++);
-      const compressed = (header & 0x80) !== 0;
-      if (!compressed && header & 0x40) {
-        const little = view.getUint8(p + 1) === 0;
-        const global = view.getUint16(p + 2, little);
-        const count = view.getUint8(p + 4);
-        p += 5;
-        const fields: Definition['fields'] = [];
-        let size = 0;
-        for (let i = 0; i < count; i++, p += 3) {
-          fields.push({ number: view.getUint8(p), size: view.getUint8(p + 1) });
-          size += view.getUint8(p + 1);
-        }
-        if (header & 0x20) {
-          const developer = view.getUint8(p++);
-          for (let i = 0; i < developer; i++, p += 3) size += view.getUint8(p + 1);
-        }
-        definitions.set(header & 0x0f, { global, little, fields, size });
-        continue;
-      }
-      const definition = definitions.get(compressed ? (header >> 5) & 0x03 : header & 0x0f);
-      if (!definition) throw new Error('damaged FIT file');
-      if (definition.global === RECORD && p + definition.size <= end) {
-        let lat = NaN;
-        let lng = NaN;
-        let at = p;
-        for (const field of definition.fields) {
-          if (field.size === 4 && (field.number === 0 || field.number === 1)) {
-            const raw = view.getInt32(at, definition.little);
-            if (raw !== 0x7fffffff) {
-              if (field.number === 0) lat = raw * SEMICIRCLE;
-              else lng = raw * SEMICIRCLE;
-            }
-          }
-          at += field.size;
-        }
-        if (valid(lng, lat)) points.push([lng, lat]);
-      }
-      p += definition.size;
-    }
-    offset = end + 2; // CRC
-  }
-  return points.length > 1 ? [points] : [];
-}
-
-/** Track segments from the bytes of a GPX, TCX or FIT file; the name's extension tells which. */
-export function parseTrack(name: string, data: ArrayBuffer): Segments {
-  const extension = name.split(/[?#]/)[0].split('.').pop()?.toLowerCase();
-  if (extension === 'fit') return parseFit(data);
-  const text = new TextDecoder().decode(data);
-  if (extension === 'tcx') return parseTcx(text);
-  if (extension === 'gpx') return parseGpx(text);
-  // No telling extension (a download address, say): go by the content.
-  if (new TextDecoder().decode(data.slice(8, 12)) === '.FIT') return parseFit(data);
-  if (/<TrainingCenterDatabase[\s>]/.test(text)) return parseTcx(text);
-  if (/<gpx[\s>]/.test(text)) return parseGpx(text);
-  throw new Error('unsupported file type (use GPX, TCX or FIT)');
-}
-
-async function parseFile(file: File): Promise<Segments> {
-  return parseTrack(file.name, await file.arrayBuffer());
+async function parseFile(file: File): Promise<Recording> {
+  return readTrack(file.name, await file.arrayBuffer());
 }
 
 // ── map layers and list ──
@@ -202,15 +69,28 @@ interface Track {
   name: string;
   colour: string;
   segments: Segments;
+  /** What the device recorded, for tracks that came from a file and were not edited since. */
+  recorded: Recorded | null;
   bounds: maplibregl.LngLatBounds;
   km: number;
 }
 
 /** What is kept in the browser's storage so tracks survive a reload. */
+/** Recorded heights (m) and times (ms since 1970), one per point of `segments.flat()`. */
+export interface Recorded {
+  ele: (number | null)[] | null;
+  time: (number | null)[] | null;
+}
+
 interface StoredTrack {
   name: string;
   colour: string;
   segments: Segments;
+  /** Heights in decimetres, null where missing. */
+  e?: (number | null)[];
+  /** Start time (ms since 1970) and seconds after it per point, null where missing. */
+  t0?: number;
+  t?: (number | null)[];
 }
 
 export interface TrackList {
@@ -223,7 +103,7 @@ export interface TrackList {
   /** Called when the user asks for a link that carries a track. */
   onShare: (name: string, coords: Point[]) => void;
   /** Called when a track is clicked in the list: show its profile and statistics. */
-  onView: (id: string, name: string, coords: Point[]) => void;
+  onView: (id: string, name: string, coords: Point[], recorded: Recorded | null) => void;
 }
 
 const rounded = ([lng, lat]: Point): Point => [Math.round(lng * 1e5) / 1e5, Math.round(lat * 1e5) / 1e5];
@@ -254,6 +134,7 @@ export function enableTrackDrop(map: maplibregl.Map, listParent: HTMLElement): T
       if (!track || coords.length < 2) return false;
       track.name = name;
       track.segments = [coords.map(rounded)];
+      track.recorded = null; // an edited line no longer matches what the device recorded
       track.bounds = new maplibregl.LngLatBounds();
       for (const point of track.segments[0]) track.bounds.extend(point);
       track.km = lengthKm(track.segments);
@@ -300,11 +181,12 @@ export function enableTrackDrop(map: maplibregl.Map, listParent: HTMLElement): T
     const bounds = new maplibregl.LngLatBounds();
     for (const file of files) {
       try {
-        const segments = await parseFile(file);
-        if (!segments.length) throw new Error('no track points found');
+        const file_ = await parseFile(file);
+        if (!file_.segments.length) throw new Error('no track points found');
         // About 1 m precision: plenty for drawing, a third of the storage.
-        const rounded = segments.map((segment) => segment.map(([lng, lat]): Point => [Math.round(lng * 1e5) / 1e5, Math.round(lat * 1e5) / 1e5]));
-        bounds.extend(add(file.name, rounded).bounds);
+        const rounded = file_.segments.map((segment) => segment.map(([lng, lat]): Point => [Math.round(lng * 1e5) / 1e5, Math.round(lat * 1e5) / 1e5]));
+        const recorded = file_.ele || file_.time ? { ele: file_.ele, time: file_.time } : null;
+        bounds.extend(add(file.name, rounded, undefined, recorded).bounds);
       } catch (error) {
         toast(`${file.name}: ${(error as Error).message}`);
       }
@@ -315,7 +197,16 @@ export function enableTrackDrop(map: maplibregl.Map, listParent: HTMLElement): T
   }
 
   function save(): void {
-    const stored: StoredTrack[] = tracks.map(({ name, colour, segments }) => ({ name, colour, segments }));
+    const stored: StoredTrack[] = tracks.map(({ name, colour, segments, recorded }) => {
+      const entry: StoredTrack = { name, colour, segments };
+      if (recorded?.ele) entry.e = recorded.ele.map((z) => (z === null ? null : Math.round(z * 10)));
+      if (recorded?.time) {
+        const t0 = recorded.time.find((t) => t !== null) ?? 0;
+        entry.t0 = t0;
+        entry.t = recorded.time.map((t) => (t === null ? null : Math.round((t - t0) / 1000)));
+      }
+      return entry;
+    });
     try {
       if (stored.length) localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
       else localStorage.removeItem(STORAGE_KEY);
@@ -343,12 +234,16 @@ export function enableTrackDrop(map: maplibregl.Map, listParent: HTMLElement): T
     }
     if (!Array.isArray(stored)) return;
     for (const track of stored) {
-      if (typeof track?.name === 'string' && Array.isArray(track.segments) && track.segments[0]?.length > 1) add(track.name, track.segments, track.colour);
+      if (typeof track?.name !== 'string' || !Array.isArray(track.segments) || !(track.segments[0]?.length > 1)) continue;
+      const count = track.segments.reduce((n, segment) => n + segment.length, 0);
+      const ele = Array.isArray(track.e) && track.e.length === count ? track.e.map((z) => (z === null ? null : z / 10)) : null;
+      const time = Array.isArray(track.t) && track.t.length === count ? track.t.map((t) => (t === null ? null : (track.t0 ?? 0) + t * 1000)) : null;
+      add(track.name, track.segments, track.colour, ele || time ? { ele, time } : null);
     }
     render();
   }
 
-  function add(name: string, segments: Segments, storedColour?: string): Track {
+  function add(name: string, segments: Segments, storedColour?: string, recorded: Recorded | null = null): Track {
     const id = `track-${++counter}`;
     const colour = storedColour ?? COLOURS.find((c) => !tracks.some((t) => t.colour === c)) ?? COLOURS[(counter - 1) % COLOURS.length];
     const bounds = new maplibregl.LngLatBounds();
@@ -372,7 +267,7 @@ export function enableTrackDrop(map: maplibregl.Map, listParent: HTMLElement): T
       { id: `${id}-finish`, type: 'symbol', source: id, filter: ['==', ['get', 'end'], 'finish'], layout: { 'icon-image': FINISH_ICON, 'icon-allow-overlap': true, 'icon-ignore-placement': true } },
       SLOT.tracks,
     );
-    const track = { id, name, colour, segments, bounds, km: lengthKm(segments) };
+    const track: Track = { id, name, colour, segments, recorded, bounds, km: lengthKm(segments) };
     tracks.push(track);
     return track;
   }
@@ -403,7 +298,7 @@ export function enableTrackDrop(map: maplibregl.Map, listParent: HTMLElement): T
               title: `${track.name} — click to zoom to it and see its profile`,
               onclick: () => {
                 map.fitBounds(track.bounds, { padding: { top: 80, bottom: 300, left: 340, right: 80 }, maxZoom: 15 });
-                api.onView(track.id, track.name, track.segments.flat());
+                api.onView(track.id, track.name, track.segments.flat(), track.recorded);
               },
             },
             track.name,

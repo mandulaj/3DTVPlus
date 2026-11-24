@@ -5,6 +5,7 @@ set -eu
 cd "$(dirname "$0")/.."
 remote=$(git remote get-url origin)
 revision=$(git rev-parse --short HEAD)
+npm test
 npm run build
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT

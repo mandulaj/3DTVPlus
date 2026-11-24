@@ -629,7 +629,7 @@ input[type='range'] {
 }
 /* The sun bar moves above the planner. */
 body.planner-open #sunbar {
-  bottom: 276px;
+  bottom: calc(var(--planner-height, 230px) + 44px);
 }
 .plan-bar {
   display: flex;
@@ -881,7 +881,7 @@ body.planner-open #sunbar {
 
 /* The planner takes the full width: the side panel ends above it and scrolls inside. */
 body.planner-open #panel {
-  bottom: 290px;
+  bottom: calc(var(--planner-height, 230px) + 50px);
 }
 .tracks {
   flex-shrink: 0;
@@ -915,4 +915,139 @@ body.planner-open #panel {
 #toast.info {
   background: #1d2b3b;
   color: #e6f0ff;
+}
+
+/* Controls that only make sense for a recording with heights. */
+#planner:not(.has-recorded-heights) .recorded-only {
+  display: none;
+}
+/* Many statistics (recordings): three columns instead of two. */
+.plan-stats.many {
+  grid-template-columns: auto auto auto;
+  gap: 1px 12px;
+}
+.plan-stats.many .plan-stat b {
+  font-size: 13.5px;
+}
+
+/* ── look mode button, Done button ── */
+.look-mode {
+  font-size: 15px;
+}
+.look-mode.on {
+  background: var(--accent) !important;
+}
+#planner:not(.drawing) .drawing-only {
+  display: none;
+}
+#planner .drawing-only {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+.plan-chart {
+  touch-action: none; /* the chart handles its own drags and pinches */
+}
+
+/* ── phones ── */
+@media (max-width: 700px) {
+  #panel {
+    top: 6px;
+    left: 6px;
+    width: min(330px, calc(100vw - 60px));
+  }
+  #planner {
+    left: 4px;
+    right: 4px;
+    bottom: 28px;
+    padding: 6px;
+    gap: 4px;
+  }
+  /* Toolbar and statistics become rows that scroll sideways. */
+  .plan-bar {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .plan-name {
+    flex: 0 0 150px;
+  }
+  .plan-body {
+    flex-direction: column;
+    gap: 4px;
+  }
+  .plan-stats,
+  .plan-stats.many {
+    display: flex;
+    gap: 14px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    min-width: 0;
+  }
+  .plan-stat {
+    flex: none;
+  }
+  .plan-stats-title {
+    flex: none;
+    align-self: center;
+  }
+  .plan-chart {
+    flex: none;
+    height: 92px;
+    border-left: 0;
+  }
+  .plan-hint {
+    display: none;
+  }
+  .plan-grades i {
+    font-size: 9px;
+    padding: 0 2px;
+  }
+  #sunbar {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+  .time-wrap {
+    flex: 1 1 100%;
+    width: auto;
+    order: 5;
+  }
+}
+
+/* ── fingers need bigger targets ── */
+@media (pointer: coarse) {
+  .plan-point {
+    width: 20px;
+    height: 20px;
+  }
+  .plan-point.finish {
+    width: 22px;
+    height: 22px;
+    background-size: 11px 11px;
+  }
+  .plan-select-handle {
+    width: 30px;
+    margin-left: -15px;
+  }
+  .plan-select-handle::after {
+    left: 11px;
+  }
+  .plan-bar button,
+  .plan-bar select,
+  .segmented button,
+  .track-row button {
+    min-height: 34px;
+  }
+  .peak-label {
+    padding: 4px 8px;
+    font-size: 12.5px;
+  }
+  .row {
+    padding: 5px 0;
+  }
+  input[type='checkbox'] {
+    width: 18px;
+    height: 18px;
+  }
 }

@@ -4,12 +4,13 @@
 import * as maplibregl from 'maplibre-gl';
 import type { GeoJSONSource } from 'maplibre-gl';
 import { elevations } from './elevation';
-import { simplify } from './geometry';
 import { interaction } from './interaction';
 import { SLOT } from './map';
 import { Network } from './network';
-import type { SnowSampler } from './layers/slf';
+import type { DangerSampler, SnowSampler } from './layers/slf';
 import { placeName } from './places';
+import type { Recorded } from './tracks';
+import { MODES, controlPoints, type Mode } from './routeMath';
 import { h, toast } from './ui/dom';
 
 type Point = [lng: number, lat: number];
@@ -58,42 +59,29 @@ const GRADES: [upTo: number, colour: string][] = [
 ];
 const gradeColour = (slope: number) => GRADES.find(([upTo]) => slope < upTo)![1];
 
-/**
- * Travel modes for the time estimate. Each has a speed on flat ground (adjustable) and a rule
- * for how slope changes it; the route is timed stretch by stretch with the local slope.
- */
-const MODES = {
-  hiking: {
-    name: 'Hiking',
-    flat: 4.5,
-    // Tobler's hiking function, scaled so that level ground gives the chosen speed: fastest on a
-    // gentle descent (about 5 %), slower the steeper it gets either way.
-    factor: (slope: number) => Math.exp(-3.5 * Math.abs(slope + 0.05)) / Math.exp(-3.5 * 0.05),
-  },
-  running: {
-    name: 'Running',
-    flat: 12,
-    // Same effort as on the flat: speed follows the energy cost of running on a slope
-    // (Minetti et al. 2002). Gentle descents are faster, steep ones slower again.
-    factor: (slope: number) => {
-      const i = Math.min(0.45, Math.max(-0.45, slope));
-      const cost = 155.4 * i ** 5 - 30.4 * i ** 4 - 43.3 * i ** 3 + 46.3 * i ** 2 + 19.5 * i + 3.6;
-      return Math.min(1.25, 3.6 / cost);
-    },
-  },
-  skitouring: {
-    name: 'Ski touring',
-    flat: 4,
-    // Skinning up: as hiking, but never more than about 400 m of climb per hour (at 4 km/h flat speed).
-    // Skiing down: several times faster, most on moderate slopes, held back on very steep ones.
-    factor: (slope: number) => {
-      if (slope >= -0.03) return Math.min(Math.exp(-3.5 * slope), slope > 0 ? 0.1 / slope : Infinity);
-      const steepness = -slope;
-      return steepness < 0.35 ? 1 + 12 * steepness : Math.max(2, 5.2 - 8 * (steepness - 0.35));
-    },
-  },
-} as const;
-type Mode = keyof typeof MODES;
+/** Terrain steepness classes as on avalanche terrain maps (degrees), and their colours. */
+const ANGLES: [upTo: number, colour: string, label: string][] = [
+  [30, '#cdd5dc', '<30°'],
+  [35, '#ffe14d', '30–35°'],
+  [40, '#ff9800', '35–40°'],
+  [45, '#f44336', '40–45°'],
+  [Infinity, '#9c27b0', '>45°'],
+];
+const angleColour = (degrees: number) => ANGLES.find(([upTo]) => degrees < upTo)![1];
+const ANGLE_REACH = 15; // metres either side of a point over which its slope is measured
+
+type ColourBy = 'auto' | 'gradient' | 'snow' | 'angle' | 'danger' | 'speed';
+/** Speed classes relative to the track's typical moving speed, slow to fast. */
+const SPEEDS: [upTo: number, colour: string, label: string][] = [
+  [0.5, '#2563c9', 'much slower'],
+  [0.8, '#5e9bea', 'slower'],
+  [1.25, '#3fbf5a', 'typical'],
+  [1.7, '#f59b2b', 'faster'],
+  [Infinity, '#d32f2f', 'much faster'],
+];
+const PAUSE_SPEED = 0.3; // m/s: slower than this over a stretch counts as standing
+const MAX_RECORDED_SAMPLES = 3000;
+
 const SPEED_KEY = 'terrain-viewer.planner.speeds';
 const RAD = Math.PI / 180;
 
@@ -125,6 +113,11 @@ async function routed(a: Point, b: Point, reach: number): Promise<Point[] | null
 export interface PlannerOptions {
   /** Route lines currently drawn on the map (SAC routes): legs follow these before anything else. */
   network: () => Point[][];
+  /** Switch the snow map / the avalanche bulletin on in the viewer (a profile colouring was chosen that needs it). */
+  requestSnow: () => void;
+  requestDanger: () => void;
+  /** The avalanche bulletin shown on the map, if any. */
+  danger: () => DangerSampler | null;
   /** The snow map shown on the map, if any: drawn along the bottom of the profile. */
   snow: () => SnowSampler | null;
   /** Keep the finished route in the track list. */
@@ -153,7 +146,8 @@ export class Planner {
   private chart = h('div', { class: 'plan-chart' });
   private hint = h('div', { class: 'muted plan-hint' });
   private hover = new maplibregl.Marker({ element: h('div', { class: 'plan-hover' }) });
-  private profile: { coords: Point[]; distance: number[]; height: number[] } | null = null;
+  /** `angle`: terrain steepness in degrees at each sample (empty if unknown). */
+  private profile: { coords: Point[]; distance: number[]; height: number[]; terrain: number[]; angle: number[]; recEle: number[] | null; time: (number | null)[] | null } | null = null;
   private profileToken = 0;
   private profileTimer: number | undefined;
   private lastClick = { time: 0, x: 0, y: 0 };
@@ -167,7 +161,8 @@ export class Planner {
   private speeds: Record<Mode, number> = { hiking: MODES.hiking.flat, running: MODES.running.flat, skitouring: MODES.skitouring.flat };
   private history: Snapshot[] = [];
   private future: Snapshot[] = [];
-  private gradient = false;
+  private colourBy: ColourBy = 'auto';
+  private colourSelect!: HTMLSelectElement;
 
   constructor(
     private map: maplibregl.Map,
@@ -211,13 +206,19 @@ export class Planner {
       },
     });
     for (const [id, mode] of Object.entries(MODES)) modeSelect.append(h('option', { value: id }, mode.name));
-    const gradientBox = h('input', {
-      type: 'checkbox',
+    this.colourSelect = h('select', {
+      title: 'What the colours of the profile (and of the route on the map) show. Slope angle and danger are for orientation only, not a risk assessment.',
       onchange: () => {
-        this.gradient = gradientBox.checked;
+        this.colourBy = this.colourSelect.value as ColourBy;
+        // Choosing a colouring switches on the layer it reads from; it shows as soon as that has loaded.
+        if (this.colourBy === 'snow' && !this.options.snow()?.shown) this.options.requestSnow();
+        if (this.colourBy === 'danger' && !this.options.danger()) this.options.requestDanger();
         this.render();
       },
     });
+    for (const [value, label] of [['auto', 'Colour: automatic'], ['gradient', 'Colour: gradient'], ['snow', 'Colour: snow map'], ['angle', 'Colour: slope angle'], ['danger', 'Colour: avalanche danger'], ['speed', 'Colour: recorded speed']]) {
+      this.colourSelect.append(h('option', { value }, label));
+    }
     this.root.append(
       h(
         'div',
@@ -225,7 +226,9 @@ export class Planner {
         this.nameInput,
         h('label', { class: 'plan-snap edit', title: 'Legs follow the SAC routes shown on the map, or hiking paths, when you click on one; clicks beside a path run straight' }, snapBox, 'Follow paths'),
         h('label', { class: 'plan-snap' }, modeSelect, speedInput, 'km/h'),
-        h('label', { class: 'plan-snap', title: 'Colour the profile and the route on the map by slope: blue downhill, green flat, red uphill' }, gradientBox, 'Gradient'),
+        this.colourSelect,
+        h('label', { class: 'plan-snap recorded-only', title: 'Profile and statistics from the heights the device recorded instead of the terrain model' }, this.recordedHeights, 'Recorded heights'),
+        button('✓ Done', 'Finish adding points (Enter or double-click)', () => this.finish(), 'drawing-only'),
         button('↶', 'Undo (Ctrl+Z)', () => this.undo()),
         button('↷', 'Redo (Ctrl+Y)', () => this.redo()),
         button('Reverse', 'Swap start and finish', () => this.reverse()),
@@ -264,8 +267,15 @@ export class Planner {
         this.redo();
       }
     });
-    this.chart.addEventListener('mousedown', (event) => this.onChartDown(event));
-    this.chart.addEventListener('mousedown', (event) => this.onChartPan(event));
+    // Pointer events cover mouse, pen and touch alike.
+    this.chart.addEventListener('pointerdown', (event) => {
+      if (this.trackPinch(event)) return; // second finger: zooming, not selecting
+      this.onChartDown(event);
+      this.onChartPan(event);
+    });
+    // The planner's height varies (statistics, wrapping toolbar): tell the page, so the sun bar
+    // and the layer panel can stay clear of it.
+    new ResizeObserver(() => document.documentElement.style.setProperty('--planner-height', `${this.root.offsetHeight}px`)).observe(this.root);
     this.chart.addEventListener('auxclick', (event) => event.preventDefault()); // no paste / autoscroll on middle click
     this.chart.addEventListener('wheel', (event) => this.onChartWheel(event), { passive: false });
     this.chart.addEventListener('dblclick', () => {
@@ -273,8 +283,8 @@ export class Planner {
       this.zoom = null;
       this.render();
     });
-    this.chart.addEventListener('mousemove', (event) => this.onChartHover(event));
-    this.chart.addEventListener('mouseleave', () => this.hover.remove());
+    this.chart.addEventListener('pointermove', (event) => this.onChartHover(event));
+    this.chart.addEventListener('pointerleave', () => this.hover.remove());
   }
 
   /** Redraw statistics and profile (something they depend on changed outside). */
@@ -288,7 +298,10 @@ export class Planner {
 
   /** Open with an empty route, ready to click points. */
   open(): void {
-    if (this.readonly) this.link(null);
+    if (this.readonly) {
+      this.link(null);
+      this.recorded = null;
+    }
     this.setReadonly(false);
     this.show();
     if (!this.points.length) this.setDrawing('end');
@@ -301,7 +314,10 @@ export class Planner {
     this.setReadonly(false);
     this.show();
     this.checkpoint();
-    if (fresh) this.link(null);
+    if (fresh) {
+      this.link(null);
+      this.recorded = null;
+    }
     if (fresh && this.points.length) {
       this.reset();
       this.nameEdited = false;
@@ -317,8 +333,11 @@ export class Planner {
 
   /** Open an existing track for viewing and editing. */
   /** Show a track with its profile and statistics, without edit handles. "Edit" switches to editing. */
-  view(name: string, coords: Point[], trackId: string | null = null): void {
+  view(name: string, coords: Point[], trackId: string | null = null, recorded: Recorded | null = null): void {
     this.link(trackId);
+    // Only usable if it lines up with the points point for point.
+    this.recorded = recorded && [recorded.ele, recorded.time].every((list) => !list || list.length === coords.length) ? recorded : null;
+    this.recordedHeights.checked = false;
     this.show();
     this.reset();
     this.history = [];
@@ -336,11 +355,15 @@ export class Planner {
 
   /** From viewing to editing the same track. */
   private edit(): void {
+    if (this.recorded) toast('Editing turns this recording into a plain route: recorded times and heights no longer apply.', 'info');
     const coords = this.coords();
     if (coords.length > 1) this.load(this.nameInput.value, coords, this.trackId);
   }
 
   private readonly = false;
+  /** Heights and times a device recorded for the track being viewed (unedited tracks only). */
+  private recorded: Recorded | null = null;
+  private recordedHeights = h('input', { type: 'checkbox', onchange: () => this.render() });
   /** Track in the list that this route is: edits are written back to it. */
   private trackId: string | null = null;
   private storeTimer: number | undefined;
@@ -370,6 +393,7 @@ export class Planner {
 
   load(name: string, coords: Point[], trackId: string | null = null): void {
     this.link(trackId);
+    this.recorded = null;
     this.setReadonly(false);
     this.show();
     this.checkpoint();
@@ -775,11 +799,34 @@ export class Planner {
       this.render();
       return;
     }
-    // Evenly spaced samples, so straight legs get heights along their whole length too.
     const coords: Point[] = [line[0]];
     const distance: number[] = [0];
     let total = 0;
-    for (let i = 1; i < line.length; i++) {
+    let recEle: number[] | null = null;
+    let time: (number | null)[] | null = null;
+    const recorded = this.readonly && this.recorded && (this.recorded.ele ?? this.recorded.time)?.length === line.length ? this.recorded : null;
+    if (recorded) {
+      // A recording is sampled at its own points (thinned if there are very many), so that
+      // recorded heights and times stay attached to the right places.
+      const every = Math.ceil(line.length / MAX_RECORDED_SAMPLES);
+      const kept = [0];
+      for (let i = 1; i < line.length; i++) {
+        total += metres(line[i - 1], line[i]);
+        if (i % every === 0 || i === line.length - 1) {
+          kept.push(i);
+          coords.push(line[i]);
+          distance.push(total);
+        }
+      }
+      if (recorded.ele) {
+        // Gaps take the last known height.
+        let last = recorded.ele.find((z) => z !== null) ?? 0;
+        recEle = kept.map((i) => (last = recorded.ele![i] ?? last));
+      }
+      if (recorded.time) time = kept.map((i) => recorded.time![i]);
+    }
+    // Otherwise evenly spaced samples, so straight legs get heights along their whole length too.
+    for (let i = 1; !recorded && i < line.length; i++) {
       const d = metres(line[i - 1], line[i]);
       const parts = Math.max(1, Math.ceil(d / STEP));
       for (let k = 1; k <= parts; k++) {
@@ -791,20 +838,33 @@ export class Planner {
     }
     try {
       const height = await elevations(coords);
+      // Steepness of the ground itself (not of the route): from heights a little east, west, north and south.
+      const around: Point[] = [];
+      for (const [lng, lat] of coords) {
+        const dLat = ANGLE_REACH / 111320;
+        const dLng = dLat / Math.cos(lat * RAD);
+        around.push([lng + dLng, lat], [lng - dLng, lat], [lng, lat + dLat], [lng, lat - dLat]);
+      }
+      const near = await elevations(around);
       if (token !== this.profileToken) return;
-      this.profile = { coords, distance, height };
+      const angle = coords.map((_, i) => {
+        const dzdx = (near[i * 4] - near[i * 4 + 1]) / (2 * ANGLE_REACH);
+        const dzdy = (near[i * 4 + 2] - near[i * 4 + 3]) / (2 * ANGLE_REACH);
+        return Math.atan(Math.hypot(dzdx, dzdy)) / RAD;
+      });
+      this.profile = { coords, distance, height, terrain: height, angle, recEle, time };
       this.selection = null;
       this.zoom = null;
     } catch (error) {
       if (token !== this.profileToken) return;
-      this.profile = { coords, distance, height: [] };
+      this.profile = { coords, distance, height: [], terrain: [], angle: [], recEle, time };
       toast(`Elevation profile unavailable: ${(error as Error).message}`);
     }
     this.render();
   }
 
   /** Totals for the part of the profile between two sample indices. */
-  private summarise(from: number, to: number): { distance: number; up: number; down: number; lowest: number; highest: number; hours: number } {
+  private summarise(from: number, to: number): { distance: number; up: number; down: number; lowest: number; highest: number; hours: number; steep: number; steepest: number } {
     const p = this.profile!;
     const distance = p.distance[to] - p.distance[from];
     let up = 0;
@@ -837,7 +897,14 @@ export class Planner {
       const slope = p.height.length ? (p.height[j] - p.height[i]) / Math.max(1, run) : 0;
       hours += run / 1000 / (this.speeds[this.mode] * Math.max(0.05, mode.factor(slope)));
     }
-    return { distance, up, down, lowest, highest, hours };
+    // Ground steeper than 30 degrees, the usual threshold for avalanche terrain.
+    let steep = 0;
+    let steepest = 0;
+    for (let i = from; i <= to && i < p.angle.length; i++) {
+      if (p.angle[i] > steepest) steepest = p.angle[i];
+      if (p.angle[i] >= 30 && i > from) steep += p.distance[i] - p.distance[i - 1];
+    }
+    return { distance, up, down, lowest, highest, hours, steep, steepest };
   }
 
   /** Samples per stretch of roughly 90 m (longer on long routes): the unit for slope and time. */
@@ -871,7 +938,35 @@ export class Planner {
       stat('descent', known ? `↓ ${Math.round(s.down)} m` : '–'),
       stat(`time, ${MODES[this.mode].name.toLowerCase()}`, `${Math.floor(s.hours + 1 / 120)} h ${String(Math.round(s.hours * 60) % 60).padStart(2, '0')}`),
       stat('average gradient', known ? `${gradient >= 0 ? '+' : '−'}${Math.abs(gradient).toFixed(1)}%` : '–'),
+      stat('ground over 30°', p.angle.length ? `${(s.steep / 1000).toFixed(2)} km` : '–'),
+      stat('steepest ground', p.angle.length ? `${Math.round(s.steepest)}°` : '–'),
     ];
+    if (p.time) {
+      // What was actually recorded on this stretch: elapsed time, time on the move, speed while moving.
+      let elapsed = 0;
+      let moving = 0;
+      let movingDistance = 0;
+      for (let i = from + 1; i <= to; i++) {
+        const t0 = p.time[i - 1];
+        const t1 = p.time[i];
+        if (t0 === null || t1 === null || t1 <= t0) continue;
+        const dt = (t1 - t0) / 1000;
+        const d = p.distance[i] - p.distance[i - 1];
+        elapsed += dt;
+        if (d / dt >= PAUSE_SPEED) {
+          moving += dt;
+          movingDistance += d;
+        }
+      }
+      const clock = (seconds: number) => `${Math.floor(seconds / 3600)} h ${String(Math.floor((seconds % 3600) / 60)).padStart(2, '0')}`;
+      items.push(
+        stat('recorded time', clock(elapsed)),
+        stat('time moving', clock(moving)),
+        stat('speed while moving', moving ? `${((movingDistance / moving) * 3.6).toFixed(1)} km/h` : '–'),
+        stat('pace while moving', moving && movingDistance ? `${Math.floor(moving / 60 / (movingDistance / 1000))}:${String(Math.round((moving / (movingDistance / 1000)) % 60)).padStart(2, '0')} /km` : '–'),
+      );
+    }
+    this.stats.classList.toggle('many', items.length > 8);
     if (selected) {
       items.unshift(
         h('div', { class: 'plan-stats-title' }, 'Selection', h('button', { type: 'button', title: 'Back to the whole route (Esc)', onclick: () => this.select(null) }, '✕')),
@@ -924,11 +1019,62 @@ export class Planner {
       this.render();
     };
     const up = () => {
-      window.removeEventListener('mousemove', move);
+      window.removeEventListener('pointermove', move);
       this.chart.style.cursor = '';
     };
-    window.addEventListener('mousemove', move);
-    window.addEventListener('mouseup', up, { once: true });
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up, { once: true });
+  }
+
+  // ── touch: two fingers on the chart zoom and slide it ──
+
+  private fingers = new Map<number, number>(); // pointer id → x
+  private pinch: { span: number; anchor: number; gap: number; total: number } | null = null;
+  private pinched = false;
+
+  /** Follows touch points on the chart. True when this pointer makes it a two-finger gesture. */
+  private trackPinch(event: PointerEvent): boolean {
+    if (event.pointerType !== 'touch') return false;
+    const p = this.profile;
+    const svg = this.chart.querySelector('svg');
+    if (!p?.height.length || !svg) return false;
+    this.fingers.set(event.pointerId, event.clientX);
+    if (this.fingers.size === 1) {
+      const move = (e: PointerEvent) => {
+        if (!this.fingers.has(e.pointerId)) return;
+        this.fingers.set(e.pointerId, e.clientX);
+        if (!this.pinch || this.fingers.size < 2) return;
+        const [x0, x1] = [...this.fingers.values()];
+        const box = svg.getBoundingClientRect();
+        // Fingers apart: less of the route fills the chart. The spot between them stays under them.
+        const span = Math.min(this.pinch.total, Math.max(Math.min(this.pinch.total, 200), (this.pinch.span * this.pinch.gap) / Math.max(20, Math.abs(x1 - x0))));
+        const middle = Math.min(1, Math.max(0, ((x0 + x1) / 2 - box.left) / box.width));
+        const from = Math.min(this.pinch.total - span, Math.max(0, this.pinch.anchor - middle * span));
+        this.zoom = span >= this.pinch.total - 1 ? null : { from, to: from + span };
+        this.render();
+      };
+      const end = (e: PointerEvent) => {
+        this.fingers.delete(e.pointerId);
+        if (this.fingers.size < 2) this.pinch = null;
+        if (this.fingers.size) return;
+        window.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', end);
+        window.removeEventListener('pointercancel', end);
+      };
+      window.addEventListener('pointermove', move);
+      window.addEventListener('pointerup', end);
+      window.addEventListener('pointercancel', end);
+      return false;
+    }
+    if (this.fingers.size === 2) {
+      const [x0, x1] = [...this.fingers.values()];
+      const box = svg.getBoundingClientRect();
+      const view = this.window();
+      const middle = Math.min(1, Math.max(0, ((x0 + x1) / 2 - box.left) / box.width));
+      this.pinch = { span: view.span, anchor: view.from + middle * view.span, gap: Math.max(20, Math.abs(x1 - x0)), total: p.distance[p.distance.length - 1] };
+      this.pinched = true;
+    }
+    return true;
   }
 
   /** Wheel: zoom in or out around the cursor. Shift+wheel or sideways scroll: move along the route. */
@@ -1008,18 +1154,24 @@ export class Planner {
     // The end that stays put: the other handle, or where the drag began.
     const fixed = handle !== undefined && this.selection ? (handle === '0' ? this.selection.to : this.selection.from) : at(event);
     let moved = handle !== undefined;
+    const before = this.selection;
     const move = (e: MouseEvent) => {
+      if (this.pinch) return; // a second finger arrived: this is a zoom gesture
       if (Math.abs(e.clientX - event.clientX) > 3) moved = true;
       if (!moved) return;
       const other = at(e);
       this.select({ from: Math.min(fixed, other), to: Math.max(fixed, other) });
     };
     const up = () => {
-      window.removeEventListener('mousemove', move);
-      if (!moved) this.select(null);
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointercancel', up);
+      if (this.pinch || this.pinched) this.select(before); // the drag was the start of a pinch
+      else if (!moved) this.select(null);
+      this.pinched = false;
     };
-    window.addEventListener('mousemove', move);
-    window.addEventListener('mouseup', up, { once: true });
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up, { once: true });
+    window.addEventListener('pointercancel', up, { once: true });
   }
 
   private render(): void {
@@ -1034,6 +1186,21 @@ export class Planner {
       return;
     }
     const total = p.distance[p.distance.length - 1];
+    // Recorded heights instead of the terrain model, if asked for and available.
+    this.root.classList.toggle('has-recorded-heights', !!p.recEle);
+    p.height = this.recordedHeights.checked && p.recEle ? p.recEle : p.terrain;
+    // Recorded speed around each sample (over about a stretch either side), metres per second.
+    this.speed = [];
+    if (p.time) {
+      const reach = this.stretch();
+      for (let i = 0; i < p.time.length; i++) {
+        const a = Math.max(0, i - reach);
+        const b = Math.min(p.time.length - 1, i + reach);
+        const t0 = p.time[a];
+        const t1 = p.time[b];
+        this.speed[i] = t0 !== null && t1 !== null && t1 > t0 ? (p.distance[b] - p.distance[a]) / ((t1 - t0) / 1000) : null;
+      }
+    }
     // Heights are scaled to the part of the route in view.
     const view = this.window();
     const firstShown = Math.max(0, this.indexAt(view.from) - 1);
@@ -1073,6 +1240,13 @@ export class Planner {
       labels.push(label);
     }
 
+    // What the colours show. Options that need a layer which is not on fall back to the plain route.
+    const snow = this.options.snow();
+    const danger = this.options.danger();
+    for (const option of this.colourSelect.options) option.disabled = option.value === 'speed' && !p.time; // only a recording has speeds
+    let mode: ColourBy | 'route' = this.colourBy === 'auto' ? (snow?.shown ? 'snow' : 'route') : this.colourBy;
+    if ((mode === 'snow' && !snow) || (mode === 'danger' && !danger) || (mode === 'angle' && !p.angle.length) || (mode === 'speed' && !p.time)) mode = 'route';
+
     // Steepness per stretch of roughly 90 m: for the coloured profile, the map line and the readout.
     const stretch = this.stretch();
     this.slopes = [];
@@ -1084,39 +1258,65 @@ export class Planner {
       const colour = gradeColour(slope);
       for (let k = i; k < j; k++) this.slopes[k] = slope;
       this.slopes[j] = slope;
-      if (!this.gradient) continue;
+      if (mode !== 'gradient') continue;
       let d = `M${x(p.distance[i]).toFixed(1)},${height}`;
       for (let k = i; k <= j; k++) d += `L${point(k)}`;
       area += `<path d="${d}L${x(p.distance[j]).toFixed(1)},${height}Z" fill="${colour}" fill-opacity="0.85"/>`;
       pieces.push({ type: 'Feature', properties: { colour }, geometry: { type: 'LineString', coordinates: p.coords.slice(i, j + 1) } });
     }
-    (this.map.getSource(GRADE) as GeoJSONSource | undefined)?.setData({ type: 'FeatureCollection', features: pieces });
-
-    // Snow along the route, from the snow map shown on the map: the area under the curve takes the
-    // map's colours, grey where there is no snow (or no data). The gradient colouring, if on, wins.
-    const snow = this.options.snow();
+    // Snow, slope angle and danger are known per sample: one colour per sample, drawn as runs of
+    // equal colour. Snow values and danger levels are kept for the readout whatever the colours show.
     this.snow = [];
-    let snowArea = '';
-    if (snow) {
-      const colourAt = (i: number) => {
+    this.danger = [];
+    for (let i = 0; i < p.coords.length; i++) {
+      this.snow[i] = snow ? (snow.at(p.coords[i][0], p.coords[i][1])?.value ?? null) : null;
+      this.danger[i] = danger ? danger.at(p.coords[i][0], p.coords[i][1]) : null;
+    }
+    const NEUTRAL = '#9aa3ad';
+    let colourAt: ((i: number) => string) | null = null;
+    let opacityAt: (i: number) => number = () => 0.9;
+    if (mode === 'snow' && snow) {
+      colourAt = (i) => {
         const hit = snow.at(p.coords[i][0], p.coords[i][1]);
-        this.snow[i] = hit ? hit.value : null;
-        return hit && !(snow.unit === 'cm' && hit.value <= 0) ? hit.colour : '#9aa3ad';
+        return hit && !(snow.unit === 'cm' && hit.value <= 0) ? hit.colour : NEUTRAL;
       };
+    } else if (mode === 'angle') {
+      colourAt = (i) => angleColour(p.angle[i]);
+    } else if (mode === 'speed') {
+      // Relative to this track's own typical moving speed, so it works for walking and cycling alike.
+      const moving = this.speed.filter((v): v is number => v !== null && v >= PAUSE_SPEED).sort((a, b) => a - b);
+      const typical = moving[Math.floor(moving.length / 2)] || 1;
+      colourAt = (i) => {
+        const v = this.speed[i];
+        return v === null || v === undefined || v < PAUSE_SPEED ? NEUTRAL : SPEEDS.find(([upTo]) => v / typical < upTo)![1];
+      };
+    } else if (mode === 'danger') {
+      colourAt = (i) => this.danger[i]?.colour ?? NEUTRAL;
+      // Paler outside the altitudes the bulletin's avalanche problems are described for.
+      opacityAt = (i) => {
+        const hit = this.danger[i];
+        return !hit || !hit.bands.length || hit.bands.some((b) => p.height[i] >= b.from && p.height[i] <= b.to) ? 0.9 : 0.4;
+      };
+    }
+    if (colourAt) {
       let from = 0;
-      let current = colourAt(0);
+      let current = `${colourAt(0)}|${opacityAt(0)}`;
       for (let i = 1; i < p.coords.length; i++) {
-        const colour = colourAt(i);
-        if (colour === current && i < p.coords.length - 1) continue;
-        // One piece per run of equal colour, from the curve down to the axis.
+        const next = `${colourAt(i)}|${opacityAt(i)}`;
+        if (next === current && i < p.coords.length - 1) continue;
+        const [colour, opacity] = current.split('|');
+        // One piece per run, from the curve down to the axis.
         let d = `M${x(p.distance[from]).toFixed(1)},${height}`;
         for (let k = from; k <= i; k++) d += `L${point(k)}`;
-        snowArea += `<path d="${d}L${x(p.distance[i]).toFixed(1)},${height}Z" fill="${current}" fill-opacity="0.9"/>`;
+        area += `<path d="${d}L${x(p.distance[i]).toFixed(1)},${height}Z" fill="${colour}" fill-opacity="${opacity}"/>`;
+        // The snow map itself is on the map already; slope angle and danger colour the route line.
+        if (mode !== 'snow') pieces.push({ type: 'Feature', properties: { colour }, geometry: { type: 'LineString', coordinates: p.coords.slice(from, i + 1) } });
         from = i;
-        current = colour;
+        current = next;
       }
     }
-    const coloured = this.gradient ? area : snowArea;
+    (this.map.getSource(GRADE) as GeoJSONSource | undefined)?.setData({ type: 'FeatureCollection', features: pieces });
+    const coloured = area;
 
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
@@ -1141,8 +1341,29 @@ export class Planner {
       extreme(p.height.indexOf(lowest, firstShown), '▼', 'low'),
       h('span', { class: 'plan-readout' }),
     );
-    if (snow && !this.gradient) this.chart.append(h('span', { class: 'plan-snow-label', title: 'From the snow map shown on the map; grey: no snow or no data' }, `${snow.name} (${snow.unit})`));
-    if (this.gradient) {
+    if (mode === 'snow' && snow) this.chart.append(h('span', { class: 'plan-snow-label', title: 'From the snow map shown on the map; grey: no snow or no data' }, `${snow.name} (${snow.unit})`));
+    if (mode === 'danger') this.chart.append(h('span', { class: 'plan-snow-label', title: 'Danger level of the bulletin region; paler outside the altitudes its avalanche problems are described for. Orientation only.' }, 'Avalanche danger (bulletin)'));
+    if (mode === 'speed') {
+      const legend = h('span', { class: 'plan-grades', title: 'Recorded speed compared with the typical moving speed of this track; grey: standing' });
+      for (const [, colour, label] of SPEEDS) {
+        const swatch = h('i', {}, label);
+        swatch.style.background = colour;
+        swatch.style.color = colour === '#3fbf5a' || colour === '#f59b2b' || colour === '#5e9bea' ? '#111' : '#fff';
+        legend.append(swatch);
+      }
+      this.chart.append(legend);
+    }
+    if (mode === 'angle') {
+      const legend = h('span', { class: 'plan-grades', title: 'Steepness of the ground at the route (not of the route itself). Orientation only: computed from the elevation model.' });
+      for (const [, colour, label] of ANGLES) {
+        const swatch = h('i', {}, label);
+        swatch.style.background = colour;
+        swatch.style.color = colour === '#9c27b0' || colour === '#f44336' ? '#fff' : '#111';
+        legend.append(swatch);
+      }
+      this.chart.append(legend);
+    }
+    if (mode === 'gradient') {
       const legend = h('span', { class: 'plan-grades', title: 'Slope: blue downhill, green flat, red uphill' });
       let from = -Infinity;
       for (const [upTo, colour] of GRADES) {
@@ -1161,6 +1382,9 @@ export class Planner {
   private slopes: number[] = [];
   /** Snow map value at each profile sample (null: no data), when a snow map is shown. */
   private snow: (number | null)[] = [];
+  /** Recorded speed at each profile sample in m/s (null: unknown), for recordings with times. */
+  private speed: (number | null)[] = [];
+  private danger: ReturnType<DangerSampler['at']>[] = [];
 
   private onChartHover(event: MouseEvent): void {
     const p = this.profile;
@@ -1177,7 +1401,15 @@ export class Planner {
     const slope = this.slopes[i] ?? 0;
     const sampler = this.options.snow();
     const snowValue = this.snow[i];
-    const snowText = !sampler ? '' : snowValue === null || snowValue === undefined ? ' · snow: no data' : ` · snow ${Math.round(snowValue)} ${sampler.unit}`;
+    let snowText = !sampler ? '' : snowValue === null || snowValue === undefined ? ' · snow: no data' : ` · snow ${Math.round(snowValue)} ${sampler.unit}`;
+    if (p.angle.length) snowText += ` · ground ${Math.round(p.angle[i])}°`;
+    const hit = this.danger[i];
+    if (hit) snowText += ` · danger ${hit.level} (${hit.name})`;
+    const when = p.time?.[i];
+    if (when != null) {
+      const v = this.speed[i];
+      snowText += ` · ${new Date(when).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}${v != null ? ` · ${(v * 3.6).toFixed(1)} km/h` : ''}`;
+    }
     readout.textContent = `${(p.distance[i] / 1000).toFixed(2)} km · ${Math.round(p.height[i])} m · ${slope >= 0 ? '+' : '−'}${Math.abs(Math.round(slope * 100))}%${snowText}`;
     readout.style.left = `${Math.min(88, Math.max(2, fraction * 100))}%`;
     this.hover.setLngLat(p.coords[i]).addTo(this.map);
@@ -1222,9 +1454,18 @@ export class Planner {
     const p = this.profile;
     if (!p || p.coords.length < 2) return toast('Add at least two points first.');
     const escape = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[c]!);
-    const points = p.coords
-      .map((c, i) => `      <trkpt lat="${c[1].toFixed(6)}" lon="${c[0].toFixed(6)}">${p.height.length ? `<ele>${p.height[i].toFixed(1)}</ele>` : ''}</trkpt>`)
-      .join('\n');
+    const line = this.coords();
+    const recorded = this.readonly && this.recorded && (this.recorded.ele ?? this.recorded.time)?.length === line.length ? this.recorded : null;
+    const points = recorded
+      ? // An unedited recording goes out as it came in: every point with its recorded height and time.
+        line
+          .map((c, i) => {
+            const z = recorded.ele?.[i];
+            const t = recorded.time?.[i];
+            return `      <trkpt lat="${c[1].toFixed(6)}" lon="${c[0].toFixed(6)}">${z != null ? `<ele>${z.toFixed(1)}</ele>` : ''}${t != null ? `<time>${new Date(t).toISOString()}</time>` : ''}</trkpt>`;
+          })
+          .join('\n')
+      : p.coords.map((c, i) => `      <trkpt lat="${c[1].toFixed(6)}" lon="${c[0].toFixed(6)}">${p.terrain.length ? `<ele>${p.terrain[i].toFixed(1)}</ele>` : ''}</trkpt>`).join('\n');
     const gpx =
       `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="3D Terrain Viewer" xmlns="http://www.topografix.com/GPX/1/1">\n` +
       `  <metadata><name>${escape(this.name())}</name></metadata>\n  <trk>\n    <name>${escape(this.name())}</name>\n    <trkseg>\n${points}\n    </trkseg>\n  </trk>\n</gpx>\n`;
@@ -1232,35 +1473,6 @@ export class Planner {
     link.click();
     setTimeout(() => URL.revokeObjectURL(link.href), 10000);
   }
-}
-
-/**
- * Indices of control points for an imported track: where it bends (Douglas–Peucker), plus enough
- * in between that no stretch is very long, without drowning the map in markers.
- */
-function controlPoints(coords: Point[]): number[] {
-  const scale = Math.cos(coords[0][1] * RAD) * 111320;
-  const xy = coords.map((c): [number, number] => [c[0] * scale, c[1] * 111320]);
-  const MOST = 40;
-  let tolerance = 60;
-  let keep = simplify(coords, tolerance);
-  while (keep.length > MOST) keep = simplify(coords, (tolerance *= 1.6));
-  // Long straight stretches still get a point now and then.
-  const along = [0];
-  for (let i = 1; i < xy.length; i++) along.push(along[i - 1] + Math.hypot(xy[i][0] - xy[i - 1][0], xy[i][1] - xy[i - 1][1]));
-  const spacing = Math.max(1500, along[along.length - 1] / MOST);
-  const result = [0];
-  for (let k = 1; k < keep.length; k++) {
-    let last = result[result.length - 1];
-    for (let i = last + 1; i < keep[k]; i++) {
-      if (along[i] - along[last] >= spacing && along[keep[k]] - along[i] >= spacing / 2) {
-        result.push(i);
-        last = i;
-      }
-    }
-    result.push(keep[k]);
-  }
-  return result;
 }
 
 /** From the clicked point straight to where the path begins, along it, then straight to the next point. */

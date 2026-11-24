@@ -46,9 +46,18 @@ It only pulls tiles and data from the public services listed below.
   compressed into the part after `#`, which is never sent to a server). Whoever opens it sees the track with its
   profile and can save it. A link can also point at a track file hosted elsewhere: `#gpx=https://…/tour.gpx`
   (that host must allow cross-site reading).
+- **Profile colours**: the planner's "Colour" choice shows gradient, snow depth (from the snow map that is on),
+  terrain slope angle (classes from 30°, computed from the elevation model) or the bulletin's danger level along
+  the route. Orientation only, not a risk assessment.
+- **Recorded tracks**: heights and times in GPX/TCX/FIT files are kept. Viewing such a track shows recorded time,
+  moving time, speed and pace, can switch the profile to recorded heights, colour by speed, and exports the
+  recording unchanged. Editing turns it into a plain route.
+- **Touch**: on phones the layer panel and planner adapt; taps add points ("Done" finishes), drag and pinch work
+  on the profile, a long press opens the map popup, and the eye button makes dragging turn the camera in place.
 - **SAC routes**: hiking, mountaineering, climbing, via ferrata, ski touring and snowshoe routes from the SAC route
   portal's public map service, in the portal's colours; click a route for difficulty and a link to its SAC page.
-  Content © SAC, shown unofficially.
+  Content © SAC, shown unofficially. Off by default: SAC and Skitourenguru data load only after "Show unofficial
+  third-party data" is switched on under *Settings* (stored per browser; links cannot switch it on).
 - **Peak names**: markers with name, altitude and distance from the camera (OpenStreetMap peaks); click one to stand
   on that summit, then Shift+drag to look around.
 - **Routes**: with the ski or snowshoe route overlay on, click a route for difficulty, times and a link to the
@@ -98,6 +107,9 @@ to that prefix. All other layers need no proxy.
 These are free public services without guarantees. Keep usage light; do not bulk-download tiles.
 
 `npm run check-layers` fetches one sample tile per catalogue entry and reports status and CORS.
+
+`npm test` runs the unit tests (track files, share links, route search, time model, grid maths); `npm run deploy`
+runs them first. No CI workflow is included: add one under `.github/workflows` if wanted.
 
 ## Safety
 

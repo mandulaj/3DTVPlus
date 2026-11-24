@@ -8,7 +8,8 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "check-layers": "node scripts/check-layers.mjs"
+    "check-layers": "node scripts/check-layers.mjs",
+    "deploy": "sh scripts/deploy.sh"
   },
   "dependencies": {
     "maplibre-gl": "^6.19.0",

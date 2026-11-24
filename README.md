@@ -14,6 +14,8 @@ npm run dev        # http://localhost:5173, includes proxy for SLF terrain tiles
 npm run build      # writes dist/index.html, one self-contained file
 ```
 
+`npm run deploy` builds and publishes `dist/index.html` to the `gh-pages` branch (GitHub Pages).
+
 `dist/index.html` works from any static file server (`python -m http.server --directory dist`).
 It only pulls tiles and data from the public services listed below.
 

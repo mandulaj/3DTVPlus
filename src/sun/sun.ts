@@ -148,8 +148,9 @@ export class SunController {
         },
         SLOT.shadow,
       );
-      // Fewer, coarser shadow tiles toward the horizon than for map imagery.
-      this.map.setSourceTileLodParams(2, 1, SHADOW_SOURCE);
+      // Coarser shadow tiles toward the horizon than for map imagery (MapLibre's default is 9.3, 3;
+      // a higher first value lets detail fall off faster with distance).
+      this.map.setSourceTileLodParams(12, 2, SHADOW_SOURCE);
     }
   }
 

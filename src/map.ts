@@ -12,8 +12,6 @@ const DEM_ATTRIBUTION = '<a href="https://mapterhorn.com/attribution" target="_b
 export const WATER_LAYERS = ['water-fill', 'water-line'];
 const WATER_COLOUR = '#9dbfd3';
 const WATER_EDGE = '#7ba3bb';
-const LOD_ZOOM_LEVELS = 3;
-const LOD_TILE_RATIO = 2;
 
 /** Invisible anchor layers that define the draw order of everything added later. */
 export const SLOT = {
@@ -128,17 +126,6 @@ export function createMap(container: string): maplibregl.Map {
     attributionControl: { compact: true },
     canvasContextAttributes: { antialias: true },
     maxTileCacheZoomLevels: 3,
-  });
-
-  // Steep views reach to the horizon: without a cap they load several hundred tiles per layer.
-  const tuned = new Set<string>();
-  map.on('sourcedata', (e) => {
-    if (tuned.has(e.sourceId) || e.sourceId.startsWith('sun-') || !map.getSource(e.sourceId)) return; // sun layers set their own
-    tuned.add(e.sourceId);
-    map.setSourceTileLodParams(LOD_ZOOM_LEVELS, LOD_TILE_RATIO, e.sourceId);
-  });
-  map.on('styledata', () => {
-    for (const id of tuned) if (!map.getSource(id)) tuned.delete(id); // removed sources may come back
   });
 
   map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-right');

@@ -1,10 +1,13 @@
 import './ui/style.css';
+import * as maplibregl from 'maplibre-gl';
 import { createMap, readHash, writeHash } from './map';
 import { enableLookAround } from './lookAround';
 import { enableTrackDrop } from './tracks';
 import { PeakLabels } from './peaks';
 import { Planner } from './planner';
 import { enableContextMenu } from './contextMenu';
+import { decodeShare, decodeTrack, encodeShare, encodeTrack, type SharedView } from './share';
+import { parseTrack } from './tracks';
 import { DEFAULT_BASE, byId } from './layers/catalog';
 import { LayerManager } from './layers/manager';
 import { SNOW_PRODUCTS, STATION_TYPES, SlfLayers, type SnowProduct, type StationType } from './layers/slf';
@@ -15,6 +18,23 @@ import { toast } from './ui/dom';
 import { enableRouteInfo } from './layers/routes';
 import { Skitourenguru } from './layers/skitourenguru';
 import { SAC_DISCIPLINES, SacRoutes, type SacDiscipline } from './layers/sac';
+
+// A shared link carries everything in one compressed parameter: unfold it into the ordinary
+// address before anything reads the address.
+let sharedView: SharedView | null = null;
+let sharedError = '';
+{
+  const packed = new URLSearchParams(location.hash.replace(/^#/, '')).get('s');
+  if (packed) {
+    try {
+      sharedView = await decodeShare(packed);
+      history.replaceState(history.state, '', `#${sharedView.hash}`);
+    } catch (error) {
+      sharedError = (error as Error).message;
+      history.replaceState(history.state, '', '#');
+    }
+  }
+}
 
 const map = createMap('map');
 const look = enableLookAround(map);
@@ -92,7 +112,13 @@ map.once('load', async () => {
   panel.onPeaks = (on) => peaks.setEnabled(on);
   if (terrain.peaks) peaks.setEnabled(true);
   const tracks = enableTrackDrop(map, document.getElementById('panel')!);
-  const planner = new Planner(map, { network: () => sac.routable(), snow: () => slf.snowSampler(), onSave: (name, coords) => tracks.add(name, coords), onUpdate: (id, name, coords) => tracks.update(id, name, coords) });
+  const planner = new Planner(map, { network: () => sac.routable(), snow: () => slf.snowSampler(), onSave: (name, coords) => tracks.add(name, coords), onUpdate: (id, name, coords) => tracks.update(id, name, coords),
+    onShare: (name, coords) => void shareTrack(name, coords),
+    // A shared track belongs to the link it came with, not to the map view left behind.
+    onClose: () => writeHash({ track: null, tn: null, gpx: null }),
+  });
+  tracks.onShare = (name, coords) => void shareTrack(name, coords);
+  void openSharedTrack(planner);
   tracks.onEdit = (id, name, coords) => planner.load(name, coords, id);
   tracks.onView = (id, name, coords) => planner.view(name, coords, id);
   slf.onSnowChange = () => planner.refresh();
@@ -128,6 +154,59 @@ map.on('error', (e) => {
   const message = e.error?.message ?? '';
   if (!/404|aborted|AbortError|Failed to fetch|NetworkError|status 4/i.test(message)) console.warn('[map]', message);
 });
+
+/** Copies a link to the current view that also carries the given track. */
+async function shareTrack(name: string, coords: [number, number][]): Promise<void> {
+  saveState();
+  const params = readHash();
+  for (const key of ['track', 'tn', 'gpx', 's']) params.delete(key);
+  const view = [...params.entries()].map(([k, v]) => `${k}=${k === 'map' ? v : encodeURIComponent(v)}`).join('&');
+  // Map position, layers and track are compressed together into one parameter.
+  const packed = await encodeShare({ hash: view, name, coords });
+  const link = `${location.origin}${location.pathname}#s=${packed.text}`;
+  const size = link.length < 1000 ? `${link.length} characters` : `${(link.length / 1000).toFixed(1)} kB`;
+  const accuracy = `track accurate to about ${Math.round(packed.tolerance)} m`;
+  try {
+    await navigator.clipboard.writeText(link);
+    toast(`Link copied (${size}, ${accuracy}). Anyone opening it sees this view and track.`, 'info');
+  } catch {
+    window.prompt(`Copy this link (${size}, ${accuracy}):`, link); // clipboard not available
+  }
+}
+
+/** A link may carry a track (`track=`) or point at a track file elsewhere (`gpx=`): show it. */
+async function openSharedTrack(planner: Planner): Promise<void> {
+  if (sharedError) toast(`Shared link could not be opened: ${sharedError}`);
+  const packed = hash.get('track');
+  const file = hash.get('gpx');
+  if (!sharedView?.coords && !packed && !file) return;
+  try {
+    let coords: [number, number][];
+    let name = hash.get('tn') ?? 'Shared track';
+    if (sharedView?.coords) {
+      coords = sharedView.coords;
+      name = sharedView.name || name;
+      // Keep the track in the address in the long form, so a reload still shows it.
+      writeHash({ track: (await encodeTrack(coords)).text, tn: name });
+    } else if (packed) coords = await decodeTrack(packed);
+    else {
+      const response = await fetch(file!);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      coords = parseTrack(file!, await response.arrayBuffer()).flat();
+      if (!hash.get('tn')) name = decodeURIComponent(file!.split(/[?#]/)[0].split('/').pop() ?? name);
+    }
+    if (coords.length < 2) throw new Error('no track points found');
+    planner.view(name, coords);
+    // A link without a map position (hand-made) gets the track centred.
+    if (!hash.get('map')) {
+      const bounds = coords.reduce((b, c) => b.extend(c), new maplibregl.LngLatBounds(coords[0], coords[0]));
+      map.fitBounds(bounds, { padding: { top: 80, bottom: 300, left: 340, right: 80 }, maxZoom: 15, duration: 0 });
+    }
+  } catch (error) {
+    const reason = error instanceof TypeError ? 'that site does not allow other pages to read the file' : (error as Error).message;
+    toast(`Shared track could not be opened: ${reason}`);
+  }
+}
 
 // Handy for debugging from the console.
 Object.assign(window, { map, layers, slf, sun, guru, sac, look });

@@ -27,9 +27,10 @@ export function slider(value: number, min: number, max: number, step: number, on
 }
 
 let toastTimer: number | undefined;
-export function toast(message: string): void {
+export function toast(message: string, kind: 'error' | 'info' = 'error'): void {
   const el = document.getElementById('toast')!;
   el.textContent = message;
+  el.classList.toggle('info', kind === 'info');
   el.classList.add('show');
   clearTimeout(toastTimer);
   toastTimer = window.setTimeout(() => el.classList.remove('show'), 5000);

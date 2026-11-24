@@ -42,6 +42,10 @@ It only pulls tiles and data from the public services listed below.
   path run straight. Double-click to finish; click an end to continue,
   click the line to add a point, drag points, right-click to delete. Live distance, ascent, descent, walking time
   and elevation profile; rename, keep in the track list, export GPX. Dropped tracks open in it via ✎.
+- **Share a track**: 🔗 on a track or in the planner copies a link that carries the track itself (simplified and
+  compressed into the part after `#`, which is never sent to a server). Whoever opens it sees the track with its
+  profile and can save it. A link can also point at a track file hosted elsewhere: `#gpx=https://…/tour.gpx`
+  (that host must allow cross-site reading).
 - **SAC routes**: hiking, mountaineering, climbing, via ferrata, ski touring and snowshoe routes from the SAC route
   portal's public map service, in the portal's colours; click a route for difficulty and a link to its SAC page.
   Content © SAC, shown unofficially.

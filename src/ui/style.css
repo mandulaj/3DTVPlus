@@ -911,3 +911,8 @@ body.planner-open #panel {
   border-radius: 3px;
   pointer-events: auto;
 }
+
+#toast.info {
+  background: #1d2b3b;
+  color: #e6f0ff;
+}

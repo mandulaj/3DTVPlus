@@ -163,12 +163,22 @@ function parseFit(buffer: ArrayBuffer): Segments {
   return points.length > 1 ? [points] : [];
 }
 
-async function parseFile(file: File): Promise<Segments> {
-  const extension = file.name.split('.').pop()?.toLowerCase();
-  if (extension === 'fit') return parseFit(await file.arrayBuffer());
-  if (extension === 'gpx') return parseGpx(await file.text());
-  if (extension === 'tcx') return parseTcx(await file.text());
+/** Track segments from the bytes of a GPX, TCX or FIT file; the name's extension tells which. */
+export function parseTrack(name: string, data: ArrayBuffer): Segments {
+  const extension = name.split(/[?#]/)[0].split('.').pop()?.toLowerCase();
+  if (extension === 'fit') return parseFit(data);
+  const text = new TextDecoder().decode(data);
+  if (extension === 'tcx') return parseTcx(text);
+  if (extension === 'gpx') return parseGpx(text);
+  // No telling extension (a download address, say): go by the content.
+  if (new TextDecoder().decode(data.slice(8, 12)) === '.FIT') return parseFit(data);
+  if (/<TrainingCenterDatabase[\s>]/.test(text)) return parseTcx(text);
+  if (/<gpx[\s>]/.test(text)) return parseGpx(text);
   throw new Error('unsupported file type (use GPX, TCX or FIT)');
+}
+
+async function parseFile(file: File): Promise<Segments> {
+  return parseTrack(file.name, await file.arrayBuffer());
 }
 
 // ── map layers and list ──
@@ -210,6 +220,8 @@ export interface TrackList {
   update(id: string, name: string, coords: Point[]): boolean;
   /** Called when the user asks to open a track in the route planner. */
   onEdit: (id: string, name: string, coords: Point[]) => void;
+  /** Called when the user asks for a link that carries a track. */
+  onShare: (name: string, coords: Point[]) => void;
   /** Called when a track is clicked in the list: show its profile and statistics. */
   onView: (id: string, name: string, coords: Point[]) => void;
 }
@@ -251,6 +263,7 @@ export function enableTrackDrop(map: maplibregl.Map, listParent: HTMLElement): T
       return true;
     },
     onEdit: () => {},
+    onShare: () => {},
     onView: () => {},
   };
   const tracks: Track[] = [];
@@ -396,6 +409,7 @@ export function enableTrackDrop(map: maplibregl.Map, listParent: HTMLElement): T
             track.name,
           ),
           h('span', { class: 'muted' }, `${track.km.toFixed(1)} km`),
+          h('button', { title: 'Copy a link that shows this track to others', onclick: () => api.onShare(track.name, track.segments.flat()) }, '🔗'),
           h('button', { title: 'Edit in the route planner: move, add and remove points', onclick: () => api.onEdit(track.id, track.name, track.segments.flat()) }, '✎'),
           h('button', { title: 'Remove track', onclick: () => remove(track) }, '✕'),
         );

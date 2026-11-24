@@ -4,6 +4,7 @@
 import * as maplibregl from 'maplibre-gl';
 import type { GeoJSONSource } from 'maplibre-gl';
 import { elevations } from './elevation';
+import { simplify } from './geometry';
 import { interaction } from './interaction';
 import { SLOT } from './map';
 import { Network } from './network';
@@ -128,6 +129,10 @@ export interface PlannerOptions {
   snow: () => SnowSampler | null;
   /** Keep the finished route in the track list. */
   onSave: (name: string, coords: Point[]) => string;
+  /** Make a link that carries this route and copy it. */
+  onShare: (name: string, coords: Point[]) => void;
+  /** The planner was closed. */
+  onClose: () => void;
   /** Write changes back to the track being edited. False if that track is gone. */
   onUpdate: (id: string, name: string, coords: Point[]) => boolean;
 }
@@ -228,6 +233,8 @@ export class Planner {
         button('Save', 'Add this route to the track list (kept after reload); later changes are saved to it', () => this.save(), 'edit unlinked'),
         button('Copy', 'Save a separate copy to the track list; you keep editing this track', () => this.copy(), 'edit linked'),
         button('✎ Edit', 'Change this track: move, add and remove points', () => this.edit(), 'view'),
+        button('Save to my tracks', 'Add this track to your own track list (kept after reload)', () => this.save(), 'view unlinked'),
+        button('🔗 Share', 'Copy a link that shows this route to others', () => this.share(), 'always'),
         button('Export GPX', 'Download the route as a GPX file', () => this.exportGpx(), 'always'),
         button('✕', 'Close the planner', () => this.close(), 'always'),
       ),
@@ -382,8 +389,10 @@ export class Planner {
   }
 
   close(): void {
+    const wasOpen = this.opened;
     this.opened = false;
     this.setDrawing(null);
+    if (wasOpen) this.options.onClose();
     this.root.classList.remove('open');
     document.body.classList.remove('planner-open');
     this.map.doubleClickZoom.enable();
@@ -1196,11 +1205,17 @@ export class Planner {
     this.link(this.options.onSave(this.name(), coords));
   }
 
+  private share(): void {
+    const coords = this.coords();
+    if (coords.length < 2) return toast('Add at least two points first.');
+    this.options.onShare(this.name(), coords);
+  }
+
   private copy(): void {
     const coords = this.coords();
     if (coords.length < 2) return;
     this.options.onSave(`${this.name()} (copy)`, coords);
-    toast('Copy added to the track list.');
+    toast('Copy added to the track list.', 'info');
   }
 
   private exportGpx(): void {
@@ -1226,38 +1241,10 @@ export class Planner {
 function controlPoints(coords: Point[]): number[] {
   const scale = Math.cos(coords[0][1] * RAD) * 111320;
   const xy = coords.map((c): [number, number] => [c[0] * scale, c[1] * 111320]);
-  const offLine = (p: [number, number], a: [number, number], b: [number, number]) => {
-    const dx = b[0] - a[0];
-    const dy = b[1] - a[1];
-    const length = dx * dx + dy * dy;
-    const t = length ? Math.min(1, Math.max(0, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / length)) : 0;
-    return Math.hypot(p[0] - a[0] - dx * t, p[1] - a[1] - dy * t);
-  };
-  const simplify = (tolerance: number): number[] => {
-    const keep = new Set([0, coords.length - 1]);
-    const stack: [number, number][] = [[0, coords.length - 1]];
-    while (stack.length) {
-      const [a, b] = stack.pop()!;
-      let worst = -1;
-      let distance = tolerance;
-      for (let i = a + 1; i < b; i++) {
-        const d = offLine(xy[i], xy[a], xy[b]);
-        if (d > distance) {
-          distance = d;
-          worst = i;
-        }
-      }
-      if (worst >= 0) {
-        keep.add(worst);
-        stack.push([a, worst], [worst, b]);
-      }
-    }
-    return [...keep].sort((a, b) => a - b);
-  };
   const MOST = 40;
   let tolerance = 60;
-  let keep = simplify(tolerance);
-  while (keep.length > MOST) keep = simplify((tolerance *= 1.6));
+  let keep = simplify(coords, tolerance);
+  while (keep.length > MOST) keep = simplify(coords, (tolerance *= 1.6));
   // Long straight stretches still get a point now and then.
   const along = [0];
   for (let i = 1; i < xy.length; i++) along.push(along[i - 1] + Math.hypot(xy[i][0] - xy[i - 1][0], xy[i][1] - xy[i - 1][1]));

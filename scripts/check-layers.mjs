@@ -14,7 +14,7 @@ await Promise.all(
       let url = def.kind === 'style' ? def.styleUrl : def.resolveTiles ? await def.resolveTiles() : def.tiles;
       let [z, x, y] = sampleFor(def.id);
       while (z > (def.maxzoom ?? 18)) { z--; x >>= 1; y >>= 1; }
-      url = url.replace('{key}', 'none').replace('{param}', defaultParam(def) ?? '').replace('{z}', z).replace('{x}', x).replace('{y}', y);
+      url = url.replace('blankless://', 'https://').replace('{bbox-epsg-3857}', '782715,5792092,802283,5811660').replace('{key}', 'none').replace('{param}', defaultParam(def) ?? '').replace('{z}', z).replace('{x}', x).replace('{y}', y);
       const response = await fetch(url, { headers: { Origin: 'http://localhost:5173' }, signal: AbortSignal.timeout(20000) });
       const cors = response.headers.get('access-control-allow-origin');
       // Key-protected layers are checked without a key: the endpoint must exist and refuse politely.

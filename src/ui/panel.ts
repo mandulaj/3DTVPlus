@@ -1,6 +1,8 @@
 import type * as maplibregl from 'maplibre-gl';
 import { CATALOG, KEY_PROVIDERS, byId, defaultParam, type KeyProvider, type LayerDef } from '../layers/catalog';
 import type { LayerManager } from '../layers/manager';
+import { SAC_DISCIPLINES, type SacDiscipline, type SacRoutes } from '../layers/sac';
+import type { Skitourenguru } from '../layers/skitourenguru';
 import { PRESETS, type Preset } from '../layers/presets';
 import { SNOW_PRODUCTS, STATION_TYPES, type Legend, type SlfLayers, type SnowProduct, type StationType } from '../layers/slf';
 import { WATER_LAYERS } from '../map';
@@ -14,6 +16,8 @@ export interface SlfState {
   bulletinOpacity: number;
   stations: StationType | '';
   avalanches: boolean;
+  /** Skitourenguru routes with today's risk rating. */
+  guru: boolean;
 }
 
 export interface TerrainState {
@@ -22,6 +26,8 @@ export interface TerrainState {
   colorRelief: boolean;
   /** Draw lakes and rivers in blue where no base map shows them. */
   water: boolean;
+  /** Summit markers with name, altitude and distance. */
+  peaks: boolean;
 }
 
 function groupBy<T>(items: T[], key: (item: T) => string): Map<string, T[]> {
@@ -54,6 +60,9 @@ function paramControl(def: LayerDef, value: string | undefined, onchange: (value
   return select;
 }
 
+/** Overlay under which the Skitourenguru toggle appears. */
+const GURU_PARENT = 'ch-skitouren';
+
 export class Panel {
   private legends = new Map<string, Legend>();
   private legendBox = h('div', { class: 'legends' });
@@ -61,22 +70,32 @@ export class Panel {
   private baseParamBox = h('div', { class: 'row-extra' });
   private baseSelect!: HTMLSelectElement;
   private slfBox = h('div');
+  private sacBoxes = new Map<SacDiscipline, HTMLInputElement>();
+  private sacHint = h('div', { class: 'muted' });
   private reliefScale = 1;
+  /** Set by the app: switches the peak labels. */
+  onPeaks: (on: boolean) => void = () => {};
+  /** Set by the app: opens or closes the route planner. */
+  onPlan: () => void = () => {};
 
   constructor(
     private root: HTMLElement,
     private map: maplibregl.Map,
     private layers: LayerManager,
     private slf: SlfLayers,
+    private guru: Skitourenguru,
+    private sac: SacRoutes,
     readonly slfState: SlfState,
     readonly terrain: TerrainState,
     private onStateChange: () => void,
   ) {
-    slf.onLegend = (key, legend) => {
+    const onLegend = (key: string, legend: Legend | null) => {
       if (legend) this.legends.set(key, legend);
       else this.legends.delete(key);
       this.renderLegends();
     };
+    slf.onLegend = onLegend;
+    guru.onLegend = onLegend;
     this.build();
   }
 
@@ -89,12 +108,38 @@ export class Panel {
       this.buildPresets(),
       this.buildBase(),
       this.slfBox,
+      this.buildSac(),
       this.buildOverlays(),
       this.buildTerrain(),
       this.buildSettings(),
     );
     this.syncSlf();
     this.root.append(toggle, body, this.legendBox);
+  }
+
+  // ── SAC routes ──
+
+  private buildSac(): HTMLElement {
+    this.sac.onHint = (hint) => (this.sacHint.textContent = hint ?? '');
+    const rows = (Object.entries(SAC_DISCIPLINES) as [SacDiscipline, { name: string; colour: string }][]).map(([id, discipline]) => {
+      const swatch = h('i', { class: 'swatch' });
+      swatch.style.background = discipline.colour;
+      const box = h('input', {
+        type: 'checkbox',
+        checked: this.sac.enabled.has(id),
+        onchange: () => {
+          this.sac.setDiscipline(id, box.checked);
+          this.onStateChange();
+        },
+      });
+      this.sacBoxes.set(id, box);
+      return h('label', { class: 'row' }, box, swatch, h('span', {}, discipline.name));
+    });
+    return section('Routes (SAC route portal)', false, ...rows, this.sacHint, h('div', { class: 'muted' }, 'Click a route for difficulty and a link to its SAC page. Switzerland and nearby, from zoom 10.'));
+  }
+
+  syncSac(): void {
+    for (const [id, box] of this.sacBoxes) box.checked = this.sac.enabled.has(id);
   }
 
   // ── Presets ──
@@ -111,7 +156,8 @@ export class Panel {
     });
     select.append(h('option', { value: '' }, 'Apply preset…'));
     for (const preset of PRESETS) select.append(h('option', { value: preset.id }, preset.name));
-    return h('div', { class: 'section-body preset-box' }, select);
+    const plan = h('button', { type: 'button', class: 'wide plan-button', title: 'Draw a route on the map: distance, ascent, elevation profile, GPX export', onclick: () => this.onPlan() }, '✎ Plan a route');
+    return h('div', { class: 'section-body preset-box' }, select, plan);
   }
 
   async applyPreset(preset: Preset): Promise<void> {
@@ -125,8 +171,14 @@ export class Panel {
     s.snow = preset.slf?.snow ?? '';
     s.snowDate = '';
     s.bulletin = preset.slf?.bulletin ?? false;
+    if (preset.slf?.snowOpacity !== undefined) s.snowOpacity = preset.slf.snowOpacity;
+    if (preset.slf?.bulletinOpacity !== undefined) s.bulletinOpacity = preset.slf.bulletinOpacity;
     s.stations = preset.slf?.stations ?? '';
     s.avalanches = preset.slf?.avalanches ?? false;
+    s.guru = false;
+    void this.guru.setEnabled(false);
+    this.sac.setDisciplines(preset.sac ?? []);
+    this.syncSac();
     void this.slf.setSnowMap(s.snow || null, undefined, s.snowOpacity);
     void this.slf.setBulletin(s.bulletin, s.bulletinOpacity);
     void this.slf.setStations(s.stations || null);
@@ -216,10 +268,37 @@ export class Panel {
     const state = this.layers.overlays.get(id);
     row.checkbox.checked = !!state;
     row.extra.replaceChildren();
+    if (id === GURU_PARENT && !state && this.slfState.guru) {
+      // The risk ratings make no sense without the routes they belong to.
+      this.slfState.guru = false;
+      void this.guru.setEnabled(false);
+      this.onStateChange();
+    }
     if (!state) return;
     row.extra.append(slider(state.opacity, 0, 1, 0.05, (v) => this.layers.setOverlayOpacity(id, v), 'Opacity'));
     const control = paramControl(def, state.param, (value) => void this.layers.setOverlayParam(id, value));
     if (control) row.extra.append(control);
+    if (id === GURU_PARENT) {
+      const s = this.slfState;
+      const box = h('input', {
+        type: 'checkbox',
+        checked: s.guru,
+        onchange: () => {
+          s.guru = box.checked;
+          void this.guru.setEnabled(s.guru);
+          this.onStateChange();
+        },
+      });
+      row.extra.append(
+        h(
+          'label',
+          { class: 'row sub-option', title: 'Ski tours across the Alps with Skitourenguru\'s avalanche risk rating for today. Downloads about 14 MB.' },
+          box,
+          h('span', {}, 'Skitourenguru risk rating'),
+          h('span', { class: 'badge', title: 'Unofficial use of Skitourenguru data' }, 'unofficial'),
+        ),
+      );
+    }
   }
 
   syncAllOverlays(): void {
@@ -232,16 +311,28 @@ export class Panel {
     const s = this.slfState;
     const changed = () => this.onStateChange();
 
-    const snowSelect = h('select', { class: 'wide' }, h('option', { value: '' }, 'Snow map: off'));
-    for (const [key, product] of Object.entries(SNOW_PRODUCTS)) snowSelect.append(h('option', { value: key, selected: s.snow === key }, product.name));
+    // One click per snow map: a row of buttons, the active one highlighted.
+    const snowButtons = h('div', { class: 'segmented', role: 'group', 'aria-label': 'Snow map' });
+    const markSnow = () => {
+      for (const button of snowButtons.children) button.classList.toggle('on', (button as HTMLElement).dataset.key === s.snow);
+    };
+    const snowChoices: [string, string, string][] = [['', 'Off', 'No snow map'], ...Object.entries(SNOW_PRODUCTS).map(([key, product]): [string, string, string] => [key, product.short, product.name])];
+    for (const [key, label, title] of snowChoices) {
+      snowButtons.append(
+        h('button', { type: 'button', title, 'data-key': key, onclick: () => {
+          s.snow = key as SnowProduct | '';
+          markSnow();
+          applySnow();
+        } }, label),
+      );
+    }
+    markSnow();
     const snowDate = h('input', { type: 'date', value: s.snowDate, max: new Date().toISOString().slice(0, 10), title: 'Date (empty = latest)' });
     const applySnow = () => {
-      s.snow = snowSelect.value as SnowProduct | '';
       s.snowDate = snowDate.value;
       void this.slf.setSnowMap(s.snow || null, s.snowDate || undefined, s.snowOpacity);
       changed();
     };
-    snowSelect.onchange = applySnow;
     snowDate.onchange = applySnow;
     const snowOpacity = slider(s.snowOpacity, 0, 1, 0.05, (v) => {
       s.snowOpacity = v;
@@ -283,7 +374,8 @@ export class Panel {
     return section(
       'Snow & avalanches (SLF, Switzerland)',
       true,
-      snowSelect,
+      h('div', { class: 'group-title' }, 'Snow map'),
+      snowButtons,
       h('div', { class: 'row-extra' }, snowOpacity, snowDate),
       h('label', { class: 'row' }, bulletin, h('span', {}, 'Avalanche bulletin (danger level)')),
       h('div', { class: 'row-extra' }, bulletinOpacity),
@@ -354,6 +446,20 @@ export class Panel {
           },
         }),
         h('span', {}, 'Blue lakes and rivers'),
+      ),
+      h(
+        'label',
+        { class: 'row', title: 'Name, altitude and distance from the camera. Click a label to stand on that summit.' },
+        h('input', {
+          type: 'checkbox',
+          checked: t.peaks,
+          onchange: (e: Event) => {
+            t.peaks = (e.target as HTMLInputElement).checked;
+            this.onPeaks(t.peaks);
+            this.onStateChange();
+          },
+        }),
+        h('span', {}, 'Peak names'),
       ),
     );
   }

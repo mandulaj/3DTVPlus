@@ -55,6 +55,10 @@ const basemapAt = (layer: string, style: string, ext: string) =>
 const slfMap = (layer: string) =>
   `https://map.slf.ch/mapcache/wmts/1.0.0/${layer}/default/GoogleMapsCompatible/{z}/{y}/{x}.png`;
 
+// SWISSIMAGE time travel: years with at least some coverage (1928 was never flown).
+const photoYears: { value: string; label: string }[] = [];
+for (let y = 2025; y >= 1926; y--) if (y !== 1928) photoYears.push({ value: String(y), label: String(y) });
+
 const zeitreihenYears: { value: string; label: string }[] = [];
 for (let y = 2021; y >= 1844; y--) zeitreihenYears.push({ value: `${y}1231`, label: String(y) });
 
@@ -87,6 +91,12 @@ export const CATALOG: LayerDef[] = [
 
   base({ id: 'esri-imagery', group: 'Satellite', name: 'Esri World Imagery', tiles: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', maxzoom: 19, attribution: 'Imagery © Esri, Maxar, Earthstar Geographics' }),
   base({ id: 's2cloudless', group: 'Satellite', name: 'Sentinel-2 cloudless 2024 (EOX)', tiles: 'https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2024_3857/default/g/{z}/{y}/{x}.jpg', maxzoom: 15, attribution: '<a href="https://s2maps.eu" target="_blank">Sentinel-2 cloudless</a> by EOX IT Services GmbH (contains modified Copernicus Sentinel data 2024), CC BY-NC-SA 4.0' }),
+  base({
+    id: 'gibs-hls', group: 'Satellite', name: 'Satellite by date, incl. winter (NASA HLS, 30 m)',
+    tiles: 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/HLS_S30_Nadir_BRDF_Adjusted_Reflectance/default/{param}/GoogleMapsCompatible_Level12/{z}/{y}/{x}.png',
+    maxzoom: 12, param: { kind: 'date', daysAgo: 6 }, attribution: 'NASA EOSDIS GIBS, HLS',
+    note: 'One satellite pass per day: only a strip of the map is covered on any given date. Try neighbouring dates.',
+  }),
   base({ id: 'gibs-truecolor', group: 'Satellite', name: 'NASA MODIS true colour (daily)', tiles: 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/{param}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg', maxzoom: 9, param: { kind: 'date', daysAgo: 1 }, attribution: 'NASA EOSDIS GIBS' }),
 
   base({ id: 'at-map', group: 'Neighbours', name: 'Austria basemap.at', tiles: basemapAt('geolandbasemap', 'normal', 'png'), maxzoom: 19, attribution: '<a href="https://basemap.at" target="_blank">basemap.at</a>' }),
@@ -119,6 +129,13 @@ export const CATALOG: LayerDef[] = [
   overlay({ id: 'ch-huntingban', group: 'Protected areas (CH)', name: 'Hunting ban areas', tiles: swiss('ch.bafu.wrz-jagdbanngebiete_select', 'png'), maxzoom: 18, opacity: 0.7, attribution: '© BAFU' }),
 
   overlay({ id: 'ch-geology', group: 'Thematic (CH)', name: 'Geology (GeoCover)', tiles: swiss('ch.swisstopo.geologie-geocover', 'png'), maxzoom: 16, opacity: 0.7, attribution: SWISSTOPO }),
+  overlay({
+    id: 'ch-photos', group: 'Thematic (CH)', name: 'Historic aerial photos (year)',
+    // "blankless" (map.ts) drops the empty white tiles served where a year has no photos, so the map shows through.
+    tiles: `blankless://${swiss('ch.swisstopo.swissimage-product', 'jpeg', '{param}').replace('https://', '')}`,
+    maxzoom: 19, param: { kind: 'select', options: photoYears, default: '1946' }, attribution: SWISSTOPO,
+    note: 'Each year covers only the parts of Switzerland flown that year; the map shows through elsewhere.',
+  }),
   overlay({ id: 'ch-historic', group: 'Thematic (CH)', name: 'Historic maps (journey through time)', tiles: swiss('ch.swisstopo.zeitreihen', 'png', '{param}'), maxzoom: 18, param: { kind: 'select', options: zeitreihenYears, default: '19001231' }, attribution: SWISSTOPO }),
   overlay({ id: 'ch-icao', group: 'Thematic (CH)', name: 'ICAO aeronautical chart', tiles: swiss('ch.bazl.luftfahrtkarten-icao', 'png'), maxzoom: 12, attribution: '© BAZL / swisstopo' }),
   overlay({ id: 'ch-boundaries', group: 'Thematic (CH)', name: 'Municipal boundaries', tiles: swiss('ch.swisstopo.swissboundaries3d-gemeinde-flaeche.fill', 'png'), maxzoom: 18, attribution: SWISSTOPO }),

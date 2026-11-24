@@ -1,6 +1,7 @@
 // Live snow and avalanche data from WSL-SLF (https://www.slf.ch, https://whiterisk.ch).
 import * as maplibregl from 'maplibre-gl';
 import type { ImageSource, MapGeoJSONFeature } from 'maplibre-gl';
+import { interaction } from '../interaction';
 import { SLOT } from '../map';
 
 const SLF_ATTRIBUTION = '© <a href="https://www.slf.ch" target="_blank">WSL-SLF</a>';
@@ -8,6 +9,14 @@ const SLF_ATTRIBUTION = '© <a href="https://www.slf.ch" target="_blank">WSL-SLF
 export interface ColorScale {
   unit: string;
   steps: { color: string; start: number }[];
+}
+
+/** Reads the snow map currently shown at single points (for the route profile). */
+export interface SnowSampler {
+  name: string;
+  unit: string;
+  /** Value and class colour at a point; null where the map has no data. */
+  at(lng: number, lat: number): { value: number; colour: string } | null;
 }
 
 export interface Legend {
@@ -18,11 +27,11 @@ export interface Legend {
 }
 
 export const SNOW_PRODUCTS = {
-  hs: { name: 'Snow depth', host: 'https://snow-maps-hs.slf.ch/public/hs/map', code: 'HS1D-v2', supportsCurrent: true },
-  hn1: { name: 'New snow, 1 day', host: 'https://snow-maps-hs.slf.ch/public/hn/map', code: 'HN1D', supportsCurrent: false },
-  hn2: { name: 'New snow, 2 days', host: 'https://snow-maps-hs.slf.ch/public/hn/map', code: 'HN2D', supportsCurrent: false },
-  hn3: { name: 'New snow, 3 days', host: 'https://snow-maps-hs.slf.ch/public/hn/map', code: 'HN3D', supportsCurrent: false },
-  hsrel: { name: 'Snow depth vs. long-term mean', host: 'https://snow-maps-hsrel.slf.ch/public/hsrel/map', code: 'HSREL', supportsCurrent: true },
+  hs: { short: 'Depth', name: 'Snow depth', host: 'https://snow-maps-hs.slf.ch/public/hs/map', code: 'HS1D-v2', supportsCurrent: true },
+  hn1: { short: 'New 1d', name: 'New snow, 1 day', host: 'https://snow-maps-hs.slf.ch/public/hn/map', code: 'HN1D', supportsCurrent: false },
+  hn2: { short: 'New 2d', name: 'New snow, 2 days', host: 'https://snow-maps-hs.slf.ch/public/hn/map', code: 'HN2D', supportsCurrent: false },
+  hn3: { short: 'New 3d', name: 'New snow, 3 days', host: 'https://snow-maps-hs.slf.ch/public/hn/map', code: 'HN3D', supportsCurrent: false },
+  hsrel: { short: 'vs. mean', name: 'Snow depth vs. long-term mean', host: 'https://snow-maps-hsrel.slf.ch/public/hsrel/map', code: 'HSREL', supportsCurrent: true },
 } as const;
 export type SnowProduct = keyof typeof SNOW_PRODUCTS;
 
@@ -54,6 +63,26 @@ const escapeHtml = (s: unknown) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 /** Bulletin texts contain <br/> only; everything else is escaped. */
 const richText = (s: unknown) => escapeHtml(s).replace(/&lt;br\s*\/?&gt;/g, '<br>');
+/** Longer bulletin texts are HTML: keep simple structure, drop everything else (attributes, scripts, links). */
+const SAFE_TAGS = new Set(['H2', 'H3', 'P', 'UL', 'OL', 'LI', 'BR', 'B', 'STRONG', 'EM', 'I']);
+function safeHtml(html: unknown): string {
+  const render = (node: Node): string => {
+    if (node.nodeType === Node.TEXT_NODE) return escapeHtml(node.textContent);
+    if (node.nodeType !== Node.ELEMENT_NODE) return '';
+    const inner = [...node.childNodes].map(render).join('');
+    const tag = (node as Element).tagName;
+    if (!SAFE_TAGS.has(tag)) return inner;
+    const name = tag === 'H2' || tag === 'H3' ? 'h4' : tag.toLowerCase();
+    return name === 'br' ? '<br>' : `<${name}>${inner}</${name}>`;
+  };
+  return [...new DOMParser().parseFromString(String(html ?? ''), 'text/html').body.childNodes].map(render).join('');
+}
+
+export const BULLETIN_LINKS = {
+  slf: 'https://www.slf.ch/en/avalanche-bulletin-and-snow-situation/',
+  whiteRisk: 'https://whiterisk.ch/en/conditions/bulletin',
+};
+
 const pretty = (s: unknown) => String(s ?? '').replace(/_/g, ' ').toLowerCase();
 const fmtTime = (iso: string | undefined) =>
   iso ? new Date(iso).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
@@ -84,7 +113,8 @@ export class SlfLayers {
   onLegend: (key: string, legend: Legend | null) => void = () => {};
   onError: (message: string) => void = () => {};
 
-  private popup = new maplibregl.Popup({ maxWidth: '360px', closeButton: true });
+  /** Shared by everything that shows details for a clicked map feature, so only one is open at a time. */
+  readonly popup = new maplibregl.Popup({ maxWidth: '360px', closeButton: true });
   private snowToken = 0;
   private snowUrl: string | null = null;
   private stationUnit = '';
@@ -99,8 +129,41 @@ export class SlfLayers {
 
   // ───────────── Snow maps (gridded) ─────────────
 
+  /** Told whenever the snow map shown changes (another product, date, or none). */
+  onSnowChange: () => void = () => {};
+  private snowGrid: { bytes: Uint8Array; mask: Uint8Array; width: number; height: number; extent: number[]; scale: ColorScale; name: string } | null = null;
+
+  /** The snow map on screen as numbers, or null if none is shown. */
+  snowSampler(): SnowSampler | null {
+    const grid = this.snowGrid;
+    if (!grid) return null;
+    const { bytes, mask, width, height, scale } = grid;
+    const [minX, minY, maxX, maxY] = grid.extent;
+    const first = scale.steps[0].start;
+    const last = scale.steps[scale.steps.length - 1].start;
+    return {
+      name: grid.name,
+      unit: scale.unit,
+      at: (lng, lat) => {
+        const x = (lng * Math.PI * R) / 180;
+        const y = Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360)) * R;
+        const column = Math.floor(((x - minX) / (maxX - minX)) * width);
+        const row = Math.floor(((maxY - y) / (maxY - minY)) * height);
+        if (column < 0 || row < 0 || column >= width || row >= height || mask[row * width + column] === 0) return null;
+        const value = first + (bytes[row * width + column] / 255) * (last - first);
+        let step = scale.steps[0];
+        for (const candidate of scale.steps) if (value >= candidate.start - 1e-6) step = candidate;
+        return { value, colour: step.color };
+      },
+    };
+  }
+
   async setSnowMap(product: SnowProduct | null, date?: string, opacity = 0.75): Promise<void> {
     const token = ++this.snowToken;
+    if (this.snowGrid) {
+      this.snowGrid = null;
+      this.onSnowChange();
+    }
     this.removeLayerAndSource('slf-snow');
     if (this.snowUrl) URL.revokeObjectURL(this.snowUrl);
     this.snowUrl = null;
@@ -122,8 +185,10 @@ export class SlfLayers {
       const extent = JSON.parse(response.headers.get('ch.slf.snow-maps.extent') ?? 'null') as number[] | null;
       if (!extent) throw new Error(`${spec.name}: missing extent header`);
       const validAt = response.headers.get('ch.slf.snow-maps.valid-at') ?? undefined;
-      const blob = await this.colorize(await response.blob(), scale);
+      const { blob, bytes, mask, width, height } = await this.colorize(await response.blob(), scale);
       if (token !== this.snowToken) return;
+      this.snowGrid = { bytes, mask, width, height, extent, scale, name: spec.name };
+      this.onSnowChange();
 
       const [minX, minY, maxX, maxY] = extent;
       this.snowUrl = URL.createObjectURL(blob);
@@ -159,7 +224,7 @@ export class SlfLayers {
    * SLF snow maps are data images, not pictures: red = value scaled linearly between the
    * first and last step of the colour scale, blue = data mask / coverage.
    */
-  private async colorize(encoded: Blob, scale: ColorScale): Promise<Blob> {
+  private async colorize(encoded: Blob, scale: ColorScale): Promise<{ blob: Blob; bytes: Uint8Array; mask: Uint8Array; width: number; height: number }> {
     const bitmap = await createImageBitmap(encoded, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
     const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
     const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
@@ -178,9 +243,14 @@ export class SlfLayers {
       for (const s of scale.steps) if (value >= s.start - 1e-6) step = s;
       lut.set(hexToRgb(step.color), byte * 3);
     }
+    // The raw values are kept too, for reading the map at single points.
+    const bytes = new Uint8Array(px.length / 4);
+    const coverage = new Uint8Array(px.length / 4);
     for (let i = 0; i < px.length; i += 4) {
       const byte = px[i];
       const mask = px[i + 2];
+      bytes[i / 4] = byte;
+      coverage[i / 4] = mask;
       const empty = mask === 0 || (isDepth && byte === 0); // 0 cm stays transparent
       px[i] = lut[byte * 3];
       px[i + 1] = lut[byte * 3 + 1];
@@ -188,7 +258,7 @@ export class SlfLayers {
       px[i + 3] = empty ? 0 : mask;
     }
     ctx.putImageData(image, 0, 0);
-    return canvas.convertToBlob({ type: 'image/png' });
+    return { blob: await canvas.convertToBlob({ type: 'image/png' }), bytes, mask: coverage, width: bitmap.width, height: bitmap.height };
   }
 
   // ───────────── Avalanche bulletin ─────────────
@@ -236,6 +306,7 @@ export class SlfLayers {
 
   private bulletinHtml(p: Record<string, any>): string {
     const region = (p.regions ?? []).map((r: any) => r.name).join(', ');
+    const regionId = p.regions?.[0]?.regionID as string | undefined;
     const ratings = (p.dangerRatings ?? []) as any[];
     const ratingHtml = ratings.length
       ? ratings
@@ -260,7 +331,36 @@ export class SlfLayers {
       })
       .join('');
     const valid = p.validTime ? `<div class="muted">${fmtTime(p.validTime.startTime)} → ${fmtTime(p.validTime.endTime)}</div>` : '';
-    return `<div class="popup"><h3>${escapeHtml(region)}</h3>${ratingHtml}${valid}${problems}<div class="muted">Source: SLF avalanche bulletin</div></div>`;
+
+    // Danger level for the coming days, as small numbered chips.
+    const today = new Date().toISOString().slice(0, 10);
+    const evolution = ((p.customData?.CH?.dangerRatingEvolution ?? []) as any[])
+      .filter((e) => e.date >= today)
+      .sort((a, b) => String(a.date).localeCompare(String(b.date)))
+      .map((e) => {
+        const d = DANGER[e.dangerRating?.mainValue];
+        const day = new Date(`${e.date}T12:00:00`).toLocaleDateString(undefined, { weekday: 'short' });
+        return `<span class="evolution-day" title="${escapeHtml(e.date)}: ${escapeHtml(pretty(e.dangerRating?.mainValue))}"><i style="background:${d?.color ?? '#ccc'}">${d?.level ?? '?'}</i>${escapeHtml(day)}</span>`;
+      })
+      .join('');
+    const fold = (title: string, body: string) => (body ? `<details><summary>${title}</summary>${body}</details>` : '');
+    const tendency = ((p.tendency ?? []) as any[]).map((t) => safeHtml(t.comment)).join('');
+    const more =
+      fold('Snowpack', safeHtml(p.snowpackStructure?.comment)) +
+      fold('Weather forecast', safeHtml(p.weatherForecast?.comment)) +
+      fold('Weather review', safeHtml(p.weatherReview?.comment)) +
+      fold('Tendency', tendency);
+    // White Risk (SLF's own app) opens its bulletin on a region given in the address, with all the
+    // graphics; slf.ch has no such link and neither site can be shown inside another page.
+    const whiteRisk = `${BULLETIN_LINKS.whiteRisk}${regionId ? `?regionId=${encodeURIComponent(regionId)}` : ''}`;
+    const links =
+      `<div class="popup-links"><a class="button" href="${whiteRisk}" target="_blank" rel="noopener">Show full bulletin</a>` +
+      `<a href="${BULLETIN_LINKS.slf}" target="_blank" rel="noopener">SLF website</a></div>`;
+    return (
+      `<div class="popup"><h3>${escapeHtml(region)}</h3>${ratingHtml}${valid}` +
+      (evolution ? `<div class="evolution">${evolution}</div>` : '') +
+      `${problems}${more}${links}<div class="muted">Source: SLF avalanche bulletin</div></div>`
+    );
   }
 
   // ───────────── Stations ─────────────
@@ -409,10 +509,10 @@ export class SlfLayers {
     this.bound.add(layerId);
     this.map.on('click', layerId, (e) => {
       const feature = e.features?.[0];
-      if (!feature) return;
+      if (!feature || interaction.drawing) return;
       // Points on top win over the bulletin polygon underneath.
       if (layerId === 'slf-bulletin') {
-        const pointLayers = ['slf-stations', 'slf-avalanches'].filter((id) => this.map.getLayer(id));
+        const pointLayers = ['slf-stations', 'slf-avalanches', 'guru-routes'].filter((id) => this.map.getLayer(id));
         if (pointLayers.length && this.map.queryRenderedFeatures(e.point, { layers: pointLayers }).length) return;
       }
       this.popup.setLngLat(e.lngLat).setHTML(html(feature)).addTo(this.map);

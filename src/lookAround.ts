@@ -5,19 +5,26 @@
 // MapLibre describes a view by the point at the screen centre plus zoom, bearing and pitch. To turn
 // the camera in place that centre point has to leave the ground. Zoom and pan need the centre on the ground again: with the centre floating
 // far above terrain MapLibre picks tiles for the wrong distance and requests thousands of them.
-import type * as maplibregl from 'maplibre-gl';
+import * as maplibregl from 'maplibre-gl';
 
 const RAD = Math.PI / 180;
 const EARTH_CIRCUMFERENCE = 40075016.686;
 const METRES_PER_DEGREE = EARTH_CIRCUMFERENCE / 360;
 const DEGREES_PER_PIXEL = 0.12;
-// 90 would be level with the horizon. Beyond it MapLibre requests thousands of tiles and stalls.
-const LOOK_MAX_PITCH = 89;
+// 90 would be level with the horizon. Beyond it MapLibre requests thousands of tiles and stalls,
+// and from a high viewpoint the picture already breaks up around 88.
+const LOOK_MAX_PITCH = 86;
 const MIN_ZOOM = 11; // further out the map is a globe and the flat-earth geometry used here no longer holds
 
 export interface LookAround {
   /** Turn the camera in place to this bearing and pitch (pitch is capped just below the horizon). */
   turnTo(bearing: number, pitch: number): void;
+  /** Where the camera currently is. */
+  position(): { lngLat: maplibregl.LngLat; altitude: number };
+  /** Put the camera at a point in space (e.g. just above a summit) and look along `bearing`. */
+  standAt(lngLat: maplibregl.LngLatLike, altitude: number, bearing: number, pitch: number): void;
+  /** Fly the camera to a point in space, facing the direction of travel, and end looking at `pitch`. */
+  flyTo(lngLat: maplibregl.LngLatLike, altitude: number, pitch: number): void;
 }
 
 interface Eye {
@@ -35,6 +42,7 @@ export function enableLookAround(map: maplibregl.Map): LookAround {
   // accurate, and stays valid because every other gesture first returns to an ordinary view.
   let eye: Eye | null = null;
   let turning = false;
+  let flightToken = 0; // a flight in progress stops when this changes
 
   function focalLength(): number {
     return map.getCanvas().clientHeight / 2 / Math.tan((map.getVerticalFieldOfView() * RAD) / 2);
@@ -76,6 +84,7 @@ export function enableLookAround(map: maplibregl.Map): LookAround {
    */
   function anchor(force = false): void {
     if (!eye || drag) return;
+    flightToken++;
     const { clientWidth: width, clientHeight: height } = map.getCanvas();
     const middle = { x: width / 2, y: height / 2 };
     let onTerrain = map.getPitch() <= groundMaxPitch;
@@ -116,6 +125,7 @@ export function enableLookAround(map: maplibregl.Map): LookAround {
       event.stopPropagation(); // keep MapLibre's own drag handlers out
       if (map.getZoom() < MIN_ZOOM) return;
       map.stop();
+      flightToken++; // taking over from a flight in progress
       release();
       drag = { x: event.clientX, y: event.clientY, bearing: map.getBearing(), pitch: map.getPitch() };
       canvas.style.cursor = 'move';
@@ -150,6 +160,48 @@ export function enableLookAround(map: maplibregl.Map): LookAround {
   });
 
   return {
+    position() {
+      const at = eye ?? locateEye();
+      return { lngLat: at.position, altitude: at.altitude };
+    },
+    standAt(lngLat, altitude, bearing, pitch) {
+      map.stop();
+      release();
+      eye = { position: maplibregl.LngLat.convert(lngLat), altitude };
+      turn(eye, bearing, pitch);
+    },
+    flyTo(lngLat, altitude, pitch) {
+      map.stop();
+      const from = eye ?? locateEye();
+      const to = maplibregl.LngLat.convert(lngLat);
+      release();
+      const startBearing = map.getBearing();
+      const startPitch = map.getPitch();
+      const east = (to.lng - from.position.lng) * Math.cos(from.position.lat * RAD) * METRES_PER_DEGREE;
+      const north = (to.lat - from.position.lat) * METRES_PER_DEGREE;
+      const ground = Math.hypot(east, north);
+      // Face the destination, turning the short way round. Arriving from very close, keep the heading.
+      const heading = ground > 200 ? (Math.atan2(east, north) / RAD + 360) % 360 : startBearing;
+      const turnBy = ((heading - startBearing + 540) % 360) - 180;
+      // Arc over the terrain in between rather than through it.
+      const lift = Math.min(1500, ground * 0.12);
+      const duration = Math.min(6000, 1800 + Math.sqrt(ground) * 18);
+      const began = performance.now();
+      const flight = ++flightToken;
+      const frame = (now: number) => {
+        if (flight !== flightToken || !eye) return; // interrupted by the user
+        const t = Math.min(1, (now - began) / duration);
+        const k = t < 0.5 ? 4 * t ** 3 : 1 - (-2 * t + 2) ** 3 / 2; // ease in and out
+        const swing = Math.min(1, t / 0.35);
+        eye = {
+          position: new maplibregl.LngLat(from.position.lng + (to.lng - from.position.lng) * k, from.position.lat + (to.lat - from.position.lat) * k),
+          altitude: from.altitude + (altitude - from.altitude) * k + lift * Math.sin(Math.PI * k),
+        };
+        turn(eye, startBearing + turnBy * swing * swing * (3 - 2 * swing), startPitch + (pitch - startPitch) * k);
+        if (t < 1) requestAnimationFrame(frame);
+      };
+      requestAnimationFrame(frame);
+    },
     turnTo(bearing, pitch) {
       if (map.getZoom() < MIN_ZOOM) {
         map.easeTo({ bearing, pitch: Math.min(pitch, groundMaxPitch) });

@@ -7,6 +7,42 @@ type Point = [lng: number, lat: number];
 type Segments = Point[][];
 
 const STORAGE_KEY = 'terrain-viewer.tracks';
+const START_COLOUR = '#2fbf5b';
+const FINISH_ICON = 'finish-flag';
+
+/** Checkered disc for the end of a track, registered with the map once (and again if a style change drops it). */
+function ensureFinishIcon(map: maplibregl.Map): void {
+  const add = () => {
+    if (map.hasImage(FINISH_ICON)) return;
+    const size = 36; // drawn at twice the display size
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = size;
+    const context = canvas.getContext('2d')!;
+    context.beginPath();
+    context.arc(size / 2, size / 2, size / 2 - 2, 0, 2 * Math.PI);
+    context.clip();
+    const cell = size / 4;
+    for (let y = 0; y < 4; y++) {
+      for (let x = 0; x < 4; x++) {
+        context.fillStyle = (x + y) % 2 ? '#111111' : '#ffffff';
+        context.fillRect(x * cell, y * cell, cell, cell);
+      }
+    }
+    context.lineWidth = 3;
+    context.strokeStyle = '#111111';
+    context.stroke();
+    map.addImage(FINISH_ICON, context.getImageData(0, 0, size, size), { pixelRatio: 2 });
+  };
+  add();
+  if (!listening.has(map)) {
+    listening.add(map);
+    map.on('styleimagemissing', (event) => {
+      if (event.id === FINISH_ICON) add();
+    });
+  }
+}
+const listening = new WeakSet<maplibregl.Map>();
+
 const COLOURS = ['#e5007d', '#0a84ff', '#ff7a00', '#7b2ff7', '#00a36c', '#d4002a'];
 
 // ── parsers ──
@@ -167,7 +203,56 @@ interface StoredTrack {
   segments: Segments;
 }
 
-export function enableTrackDrop(map: maplibregl.Map, listParent: HTMLElement): void {
+export interface TrackList {
+  /** Add a track made elsewhere (the route planner). Returns its id. */
+  add(name: string, coords: Point[]): string;
+  /** Replace a track's name and line (edited in the route planner). False if it no longer exists. */
+  update(id: string, name: string, coords: Point[]): boolean;
+  /** Called when the user asks to open a track in the route planner. */
+  onEdit: (id: string, name: string, coords: Point[]) => void;
+  /** Called when a track is clicked in the list: show its profile and statistics. */
+  onView: (id: string, name: string, coords: Point[]) => void;
+}
+
+const rounded = ([lng, lat]: Point): Point => [Math.round(lng * 1e5) / 1e5, Math.round(lat * 1e5) / 1e5];
+
+/** A track's line plus its start and finish points, as map data. */
+function geometry(segments: Segments): GeoJSON.FeatureCollection {
+  const lastSegment = segments[segments.length - 1];
+  return {
+    type: 'FeatureCollection',
+    features: [
+      { type: 'Feature', properties: {}, geometry: { type: 'MultiLineString', coordinates: segments } },
+      { type: 'Feature', properties: { end: 'start' }, geometry: { type: 'Point', coordinates: segments[0][0] } },
+      { type: 'Feature', properties: { end: 'finish' }, geometry: { type: 'Point', coordinates: lastSegment[lastSegment.length - 1] } },
+    ],
+  };
+}
+
+export function enableTrackDrop(map: maplibregl.Map, listParent: HTMLElement): TrackList {
+  const api: TrackList = {
+    add(name, coords) {
+      const track = add(name, [coords.map(rounded)]);
+      render();
+      save();
+      return track.id;
+    },
+    update(id, name, coords) {
+      const track = tracks.find((t) => t.id === id);
+      if (!track || coords.length < 2) return false;
+      track.name = name;
+      track.segments = [coords.map(rounded)];
+      track.bounds = new maplibregl.LngLatBounds();
+      for (const point of track.segments[0]) track.bounds.extend(point);
+      track.km = lengthKm(track.segments);
+      (map.getSource(id) as maplibregl.GeoJSONSource | undefined)?.setData(geometry(track.segments));
+      render();
+      save();
+      return true;
+    },
+    onEdit: () => {},
+    onView: () => {},
+  };
   const tracks: Track[] = [];
   let counter = 0;
   const list = h('div', { class: 'legend tracks' });
@@ -255,36 +340,24 @@ export function enableTrackDrop(map: maplibregl.Map, listParent: HTMLElement): v
     const colour = storedColour ?? COLOURS.find((c) => !tracks.some((t) => t.colour === c)) ?? COLOURS[(counter - 1) % COLOURS.length];
     const bounds = new maplibregl.LngLatBounds();
     for (const segment of segments) for (const point of segment) bounds.extend(point);
-    const first = segments[0][0];
-    const lastSegment = segments[segments.length - 1];
-    map.addSource(id, {
-      type: 'geojson',
-      data: {
-        type: 'FeatureCollection',
-        features: [
-          { type: 'Feature', properties: {}, geometry: { type: 'MultiLineString', coordinates: segments } },
-          { type: 'Feature', properties: { end: 'start' }, geometry: { type: 'Point', coordinates: first } },
-          { type: 'Feature', properties: { end: 'finish' }, geometry: { type: 'Point', coordinates: lastSegment[lastSegment.length - 1] } },
-        ],
-      },
-    });
+    map.addSource(id, { type: 'geojson', data: geometry(segments) });
     const line = { type: 'line' as const, source: id, filter: ['!', ['has', 'end']] as never, layout: { 'line-cap': 'round' as const, 'line-join': 'round' as const } };
-    map.addLayer({ ...line, id: `${id}-casing`, paint: { 'line-color': '#ffffff', 'line-width': 8, 'line-opacity': 0.9 } }, SLOT.top);
-    map.addLayer({ ...line, id: `${id}-line`, paint: { 'line-color': colour, 'line-width': 4.5 } }, SLOT.top);
+    map.addLayer({ ...line, id: `${id}-casing`, paint: { 'line-color': '#ffffff', 'line-width': 8, 'line-opacity': 0.9 } }, SLOT.tracks);
+    map.addLayer({ ...line, id: `${id}-line`, paint: { 'line-color': colour, 'line-width': 4.5 } }, SLOT.tracks);
     map.addLayer(
       {
         id: `${id}-ends`,
         type: 'circle',
         source: id,
-        filter: ['has', 'end'],
-        paint: {
-          'circle-radius': 6,
-          'circle-color': ['match', ['get', 'end'], 'start', '#ffffff', colour],
-          'circle-stroke-color': ['match', ['get', 'end'], 'start', colour, '#ffffff'],
-          'circle-stroke-width': 2.5,
-        },
+        filter: ['==', ['get', 'end'], 'start'],
+        paint: { 'circle-radius': 6, 'circle-color': START_COLOUR, 'circle-stroke-color': '#ffffff', 'circle-stroke-width': 2.5 },
       },
-      SLOT.top,
+      SLOT.tracks,
+    );
+    ensureFinishIcon(map);
+    map.addLayer(
+      { id: `${id}-finish`, type: 'symbol', source: id, filter: ['==', ['get', 'end'], 'finish'], layout: { 'icon-image': FINISH_ICON, 'icon-allow-overlap': true, 'icon-ignore-placement': true } },
+      SLOT.tracks,
     );
     const track = { id, name, colour, segments, bounds, km: lengthKm(segments) };
     tracks.push(track);
@@ -292,7 +365,7 @@ export function enableTrackDrop(map: maplibregl.Map, listParent: HTMLElement): v
   }
 
   function remove(track: Track): void {
-    for (const suffix of ['-ends', '-line', '-casing']) map.removeLayer(track.id + suffix);
+    for (const suffix of ['-finish', '-ends', '-line', '-casing']) map.removeLayer(track.id + suffix);
     map.removeSource(track.id);
     tracks.splice(tracks.indexOf(track), 1);
     render();
@@ -310,8 +383,20 @@ export function enableTrackDrop(map: maplibregl.Map, listParent: HTMLElement): v
           'div',
           { class: 'track-row' },
           swatch,
-          h('span', { class: 'track-name', title: `${track.name} — click to zoom to it`, onclick: () => map.fitBounds(track.bounds, { padding: 100, maxZoom: 15 }) }, track.name),
+          h(
+            'span',
+            {
+              class: 'track-name',
+              title: `${track.name} — click to zoom to it and see its profile`,
+              onclick: () => {
+                map.fitBounds(track.bounds, { padding: { top: 80, bottom: 300, left: 340, right: 80 }, maxZoom: 15 });
+                api.onView(track.id, track.name, track.segments.flat());
+              },
+            },
+            track.name,
+          ),
           h('span', { class: 'muted' }, `${track.km.toFixed(1)} km`),
+          h('button', { title: 'Edit in the route planner: move, add and remove points', onclick: () => api.onEdit(track.id, track.name, track.segments.flat()) }, '✎'),
           h('button', { title: 'Remove track', onclick: () => remove(track) }, '✕'),
         );
       }),
@@ -319,4 +404,5 @@ export function enableTrackDrop(map: maplibregl.Map, listParent: HTMLElement): v
   }
 
   restore();
+  return api;
 }

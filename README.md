@@ -37,6 +37,23 @@ It only pulls tiles and data from the public services listed below.
   (local storage, about 5 MB) and are restored after a reload.
 - **Presets**: one-click layer sets (ski touring, snowshoe, avalanche terrain, snow conditions, hiking, biking,
   pistes, aerial). See `src/layers/presets.ts`.
+- **Route planner**: "Plan a route" in the panel. Click points on the map; a dotted preview shows the next leg. Clicks on a
+  path follow it — first the SAC routes shown on the map, then OpenStreetMap paths (BRouter) — and clicks beside a
+  path run straight. Double-click to finish; click an end to continue,
+  click the line to add a point, drag points, right-click to delete. Live distance, ascent, descent, walking time
+  and elevation profile; rename, keep in the track list, export GPX. Dropped tracks open in it via ✎.
+- **SAC routes**: hiking, mountaineering, climbing, via ferrata, ski touring and snowshoe routes from the SAC route
+  portal's public map service, in the portal's colours; click a route for difficulty and a link to its SAC page.
+  Content © SAC, shown unofficially.
+- **Peak names**: markers with name, altitude and distance from the camera (OpenStreetMap peaks); click one to stand
+  on that summit, then Shift+drag to look around.
+- **Routes**: with the ski or snowshoe route overlay on, click a route for difficulty, times and a link to the
+  SAC route portal (lookup via geo.admin.ch). Optional Skitourenguru layer: tours across the Alps coloured by that
+  service's risk rating for today (their data, fetched live, shown unofficially).
+- **Bulletin details**: click a danger region for problems, snowpack, weather and tendency; "Show full
+  bulletin" opens that region on White Risk (neither slf.ch nor whiterisk.ch allows embedding).
+- **Historic aerial photos**: swisstopo SWISSIMAGE time travel 1926–2025 as an overlay; areas without photos for the
+  chosen year stay transparent.
 - **Blue water**: lakes and rivers (OpenFreeMap / OpenStreetMap) in the relief-only view and under elevation colours.
 - **Mapy.com** outdoor and winter maps: enter your API key under *Settings* (kept in the browser's storage).
 - **Shareable URL**: view, layers and sun time are stored in the URL hash.

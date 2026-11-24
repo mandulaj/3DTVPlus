@@ -167,6 +167,10 @@ input[type='range'] {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  /* give way when the panel is short (route planner open) */
+  flex-shrink: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 .legend {
   background: var(--bg);
@@ -305,7 +309,7 @@ input[type='range'] {
 .maplibregl-popup-content {
   color: #1c2330;
   border-radius: 8px;
-  max-height: 55vh;
+  max-height: 42vh;
   overflow-y: auto;
   font-size: 12.5px;
 }
@@ -331,7 +335,6 @@ input[type='range'] {
 }
 .popup td {
   padding: 1px 8px 1px 0;
-  text-transform: capitalize;
 }
 .danger-chip {
   display: inline-block;
@@ -460,4 +463,451 @@ input[type='range'] {
 }
 .preset-box {
   padding-top: 2px;
+}
+
+/* ── segmented buttons ── */
+.segmented {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+.segmented button {
+  flex: 1 0 auto;
+  padding: 4px 7px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: transparent;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.segmented button.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+/* ── popup extras ── */
+.popup details {
+  margin-top: 6px;
+  border-top: 1px solid #e3e6ec;
+  padding-top: 4px;
+}
+.popup summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.popup h4 {
+  margin: 6px 0 2px;
+  font-size: 12.5px;
+}
+.popup ul {
+  margin: 2px 0;
+  padding-left: 18px;
+}
+.popup p {
+  margin: 4px 0;
+}
+.evolution {
+  display: flex;
+  gap: 8px;
+  margin: 6px 0 2px;
+}
+.evolution-day {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  font-size: 11px;
+  color: #667085;
+}
+.evolution-day i {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  font-style: normal;
+  font-weight: 700;
+  color: #111;
+  display: grid;
+  place-items: center;
+}
+.popup-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin: 8px 0 4px;
+}
+.popup-links a.button {
+  text-decoration: none;
+}
+.popup-links a.button,
+.popup-links button {
+  border: 1px solid #c8ced8;
+  border-radius: 5px;
+  background: #f3f5f8;
+  color: #1c2330;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+.popup a {
+  color: #1f6feb;
+}
+.popup table {
+  border-collapse: collapse;
+}
+
+
+.swatch {
+  flex: none;
+  width: 14px;
+  height: 4px;
+  border-radius: 2px;
+}
+.sub-option {
+  flex-basis: 100%;
+}
+.row-extra {
+  flex-wrap: wrap;
+}
+
+/* ── peak labels ── */
+.peak {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+.peak-label {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(20, 26, 38, 0.82);
+  color: #fff;
+  font-size: 11.5px;
+  white-space: nowrap;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+.peak:hover .peak-label {
+  background: var(--accent);
+}
+.peak-distance {
+  opacity: 0.75;
+}
+.peak-stem {
+  width: 2px;
+  height: 34px;
+  background: linear-gradient(rgba(20, 26, 38, 0.9), rgba(255, 255, 255, 0.9));
+}
+
+/* ── route planner ── */
+.plan-button {
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+#planner {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 34px;
+  display: none;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  background: var(--bg);
+  border-radius: 10px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(6px);
+  z-index: 3;
+}
+#planner.open {
+  display: flex;
+}
+/* The sun bar moves above the planner. */
+body.planner-open #sunbar {
+  bottom: 276px;
+}
+.plan-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.plan-bar button {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  padding: 4px 9px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.plan-name {
+  flex: 1 1 180px;
+  min-width: 120px;
+  font-weight: 600;
+  font-size: 14px;
+  border-color: transparent !important;
+}
+.plan-name:hover,
+.plan-name:focus {
+  border-color: var(--line) !important;
+}
+.plan-snap {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.plan-body {
+  display: flex;
+  gap: 14px;
+  align-items: stretch;
+}
+.plan-stats {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 2px 14px;
+  align-content: center;
+  min-width: 210px;
+}
+.plan-stat {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+}
+.plan-stat b {
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+}
+.plan-stat span {
+  font-size: 11px;
+  color: var(--muted);
+}
+.plan-chart {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 120px;
+  border-left: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 13px; /* distance labels sit below the axis */
+}
+.plan-chart svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.plan-axis,
+.plan-readout {
+  position: absolute;
+  font-size: 10.5px;
+  color: var(--muted);
+  pointer-events: none;
+}
+.plan-axis.top {
+  left: 4px;
+  top: 0;
+}
+.plan-axis.bottom {
+  left: 4px;
+  bottom: 1px;
+}
+.plan-axis.right {
+  right: 2px;
+  bottom: 1px;
+}
+.plan-readout {
+  top: 0;
+  transform: translateX(-50%);
+  color: var(--fg);
+  font-weight: 600;
+  background: var(--bg);
+  padding: 0 4px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+.plan-hint {
+  min-height: 15px;
+}
+.plan-point {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  border: 3px solid #ff2d6f;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+  cursor: pointer;
+}
+.plan-point.start {
+  background: #2fbf5b;
+  border-color: #fff;
+}
+.plan-point.finish {
+  /* checkered flag */
+  width: 16px;
+  height: 16px;
+  background: conic-gradient(#111 0 25%, #fff 0 50%, #111 0 75%, #fff 0) 0 0 / 8px 8px;
+  border: 2px solid #111;
+}
+.plan-hover {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #1c2330;
+  border: 2px solid #fff;
+  pointer-events: none;
+}
+@media (max-width: 900px) {
+  #planner {
+    left: 10px;
+    right: 10px;
+  }
+  .plan-stats {
+    min-width: 0;
+  }
+}
+
+.plan-tick,
+.plan-extreme,
+.plan-grades {
+  position: absolute;
+  font-size: 10px;
+  color: var(--muted);
+  pointer-events: none;
+  white-space: nowrap;
+}
+.plan-tick.x {
+  top: 100%;
+  transform: translateX(-50%);
+}
+.plan-tick.y {
+  left: 3px;
+  transform: translateY(-100%);
+}
+.plan-extreme {
+  transform: translate(-50%, -115%);
+  color: var(--fg);
+  font-weight: 600;
+  text-shadow: 0 0 3px var(--bg), 0 0 3px var(--bg);
+}
+.plan-extreme.low {
+  transform: translate(-50%, 10%);
+}
+.plan-grades {
+  left: 50%;
+  transform: translateX(-50%);
+  top: -1px;
+  display: flex;
+  gap: 2px;
+}
+.plan-grades i {
+  font-style: normal;
+  color: #111;
+  padding: 0 3px;
+  border-radius: 2px;
+}
+
+.plan-speed {
+  width: 52px;
+  padding: 3px 4px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: transparent;
+}
+
+/* ── profile selection ── */
+.plan-select-band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: rgba(255, 214, 10, 0.28);
+  border-left: 2px solid #c79a00;
+  border-right: 2px solid #c79a00;
+  pointer-events: none;
+}
+.plan-select-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 13px;
+  margin-left: -6.5px;
+  cursor: ew-resize;
+}
+.plan-select-handle::after {
+  content: '';
+  position: absolute;
+  left: 2.5px;
+  top: 35%;
+  width: 8px;
+  height: 30%;
+  border-radius: 4px;
+  background: #c79a00;
+  box-shadow: 0 0 2px rgba(0, 0, 0, 0.5);
+}
+.plan-chart {
+  user-select: none;
+  cursor: crosshair;
+}
+.plan-stats-title {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #a67c00;
+}
+.plan-stats-title button {
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  color: var(--muted);
+  padding: 0 2px;
+}
+.plan-select-end {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #ffd60a;
+  border: 2px solid #5c4700;
+  pointer-events: none;
+}
+
+/* The planner takes the full width: the side panel ends above it and scrolls inside. */
+body.planner-open #panel {
+  bottom: 290px;
+}
+.tracks {
+  flex-shrink: 0;
+}
+/* Viewing a saved track: only the controls that make sense without editing. */
+#planner.readonly .edit {
+  display: none;
+}
+#planner:not(.readonly) .view {
+  display: none;
+}
+
+/* "Save" until the route is in the track list; "Copy" once it is. */
+#planner.linked .unlinked,
+#planner:not(.linked) .linked {
+  display: none;
+}
+
+.plan-snow-label {
+  position: absolute;
+  right: 4px;
+  bottom: 3px;
+  font-size: 10px;
+  color: var(--fg);
+  background: var(--bg);
+  padding: 0 4px;
+  border-radius: 3px;
+  pointer-events: auto;
 }

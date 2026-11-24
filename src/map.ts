@@ -19,6 +19,8 @@ export const SLOT = {
   overlay: 'slot-overlay', // relief shading + raster overlays go below this
   shadow: 'slot-shadow', // sun shadows / night go below this
   top: 'slot-top', // vector data (bulletin, stations) goes below this
+  tracks: 'slot-tracks', // dropped and saved tracks: above every map layer
+  plan: 'slot-plan', // the route being planned or viewed: above the tracks
 } as const;
 
 const slot = (id: string) => ({ id, type: 'background' as const, layout: { visibility: 'none' as const } });
@@ -29,7 +31,63 @@ const COLOR_RELIEF = [
   2200, '#a98b6f', 2800, '#b9b0a8', 3400, '#e8e8ec', 4500, '#ffffff', 8800, '#ffffff',
 ];
 
+/**
+ * `blankless://host/path` fetches `https://host/path` and makes the blank parts of a tile transparent.
+ * swisstopo's historic photo layer is white wherever a year has no imagery: whole tiles, or the
+ * part of a tile beyond the edge of the photo mosaic. White that touches the tile border is removed;
+ * bright spots inside a photo (snow, roofs) stay.
+ */
+const BLANK_TILE_BYTES = 1200; // an all-white JPEG tile
+const WHITE = 244;
+
+function registerBlanklessProtocol(): void {
+  maplibregl.addProtocol('blankless', async (params, abortController) => {
+    const response = await fetch(params.url.replace('blankless://', 'https://'), { signal: abortController.signal });
+    if (!response.ok) throw new Error(`Tile ${response.status}`);
+    const blob = await response.blob();
+    if (blob.size < BLANK_TILE_BYTES) return { data: await createImageBitmap(new ImageData(1, 1)) };
+
+    const bitmap = await createImageBitmap(blob);
+    const { width, height } = bitmap;
+    const canvas = new OffscreenCanvas(width, height);
+    const context = canvas.getContext('2d', { willReadFrequently: true })!;
+    context.drawImage(bitmap, 0, 0);
+    bitmap.close();
+    const image = context.getImageData(0, 0, width, height);
+    const px = image.data;
+    const isWhite = (i: number) => px[i * 4 + 3] !== 0 && px[i * 4] >= WHITE && px[i * 4 + 1] >= WHITE && px[i * 4 + 2] >= WHITE;
+
+    // Flood fill inward from every white border pixel.
+    const stack: number[] = [];
+    const visit = (i: number) => {
+      if (isWhite(i)) {
+        px[i * 4 + 3] = 0;
+        stack.push(i);
+      }
+    };
+    for (let x = 0; x < width; x++) {
+      visit(x);
+      visit((height - 1) * width + x);
+    }
+    for (let y = 0; y < height; y++) {
+      visit(y * width);
+      visit(y * width + width - 1);
+    }
+    if (!stack.length) return { data: await createImageBitmap(blob) }; // fully covered: nothing to cut
+    while (stack.length) {
+      const i = stack.pop()!;
+      const x = i % width;
+      if (x > 0) visit(i - 1);
+      if (x < width - 1) visit(i + 1);
+      if (i >= width) visit(i - width);
+      if (i < (height - 1) * width) visit(i + width);
+    }
+    return { data: await createImageBitmap(image) };
+  });
+}
+
 export function createMap(container: string): maplibregl.Map {
+  registerBlanklessProtocol();
   maplibregl.setWorkerUrl(URL.createObjectURL(new Blob([workerSource], { type: 'text/javascript' })));
 
   const dem = {
@@ -110,6 +168,8 @@ export function createMap(container: string): maplibregl.Map {
       slot(SLOT.overlay),
       slot(SLOT.shadow),
       slot(SLOT.top),
+      slot(SLOT.tracks),
+      slot(SLOT.plan),
     ],
   };
 

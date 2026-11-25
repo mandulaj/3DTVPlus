@@ -1286,3 +1286,17 @@ body.weather-on .search {
 .route-option { cursor: pointer; border-radius: 4px; padding: 2px 4px; margin: 2px -4px; }
 .route-option:hover { background: rgba(0, 213, 255, 0.12); }
 .route-option.on { background: rgba(0, 213, 255, 0.25); box-shadow: inset 3px 0 0 #00b4d8; }
+
+/* Route filters: a small button beside a kind of route, and its controls underneath. */
+.filter-row { display: flex; align-items: center; gap: 6px; }
+.filter-row > label.row { flex: 1; min-width: 0; }
+.route-filter-toggle { font-size: 11px; padding: 1px 7px; border-radius: 10px; opacity: 0.75; }
+.route-filter-toggle:hover { opacity: 1; }
+.route-filter-toggle.on { opacity: 1; background: #1f6feb; border-color: #1f6feb; color: #fff; }
+.route-filter { margin: 0 0 6px 24px; font-size: 12px; }
+.route-filter > div { display: flex; align-items: center; gap: 4px; margin-top: 3px; }
+.route-filter .muted { min-width: 40px; }
+.route-filter .muted:last-of-type { min-width: 0; }
+.route-filter select { width: 62px; padding: 1px 3px; font-size: 12px; }
+.route-filter input { width: 52px; padding: 1px 3px; font-size: 12px; }
+.route-filter-clear { margin-left: auto; font-size: 11px; padding: 1px 6px; }

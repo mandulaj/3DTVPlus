@@ -22,6 +22,7 @@ import { unofficial } from './unofficial';
 import { enableRouteInfo } from './layers/routes';
 import { Skitourenguru } from './layers/skitourenguru';
 import { Camptocamp } from './layers/camptocamp';
+import { decodeFilter, encodeFilter } from './layers/routeFilter';
 import { SAC_DISCIPLINES, SacRoutes, type SacDiscipline } from './layers/sac';
 
 // A shared link carries everything in one compressed parameter: unfold it into the ordinary
@@ -111,6 +112,8 @@ function saveState(): void {
     slf: slfParts.join(',') || null,
     sac: [...sac.enabled].join(',') || null,
     c2c: c2c.enabled ? '1' : null,
+    // route filters: "ski_tour:1~2~~1500,c2c:~3~~"
+    rf: [...[...sac.filters].map(([id, filter]) => `${id}:${encodeFilter(filter)}`), ...(c2c.filter ? [`c2c:${encodeFilter(c2c.filter)}`] : [])].join(',') || null,
     terrain:
       terrain.exaggeration !== 1 || terrain.hillshade !== 0.35 || terrain.colorRelief || !terrain.water || terrain.peaks || terrain.colorReliefOpacity !== 0.5
         ? `${terrain.exaggeration}~${terrain.hillshade}~${terrain.colorRelief ? 1 : 0}~${terrain.water ? 1 : 0}~${terrain.peaks ? 1 : 0}~${terrain.colorReliefOpacity}`
@@ -190,6 +193,18 @@ map.once('load', async () => {
   if (slfState.guru) void guru.setEnabled(true);
   if (unofficial.enabled) sac.setDisciplines((hash.get('sac') ?? '').split(',').filter((d): d is SacDiscipline => d in SAC_DISCIPLINES));
   panel.syncSac();
+  panel.onCamptocampFilter = (filter) => {
+    c2c.setFilter(filter);
+    saveState();
+  };
+  for (const entry of (hash.get('rf') ?? '').split(',').filter(Boolean)) {
+    const [key, text] = entry.split(':');
+    const filter = decodeFilter(text ?? '');
+    if (key === 'c2c') c2c.setFilter(filter);
+    else if (key in SAC_DISCIPLINES) sac.setFilter(key as SacDiscipline, filter);
+    else continue;
+    panel.showRouteFilter(key, filter);
+  }
   c2c.onHint = (hint) => (panel.camptocampHint.textContent = hint ?? '');
   panel.onCamptocamp = (on) => {
     void c2c.setEnabled(on);

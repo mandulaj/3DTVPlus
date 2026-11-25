@@ -6,7 +6,8 @@ import type { GeoJSONSource } from 'maplibre-gl';
 import { interaction } from '../interaction';
 import { SLOT } from '../map';
 import { toLv95, toWgs84 } from '../swissGrid';
-import { describeStats, trackStats } from '../trackStats';
+import { describeStats, mainClimb, trackStats } from '../trackStats';
+import { filtersClimb, filtersGrade, gradeRank, isActive, passes, type RouteFilter, type Scale } from './routeFilter';
 
 const API = 'https://www.suissealpine.sac-cas.ch/api/1';
 const PORTAL = 'https://www.sac-cas.ch/en/huts-and-tours/sac-route-portal';
@@ -14,13 +15,13 @@ const ATTRIBUTION = '© <a href="https://www.sac-cas.ch/en/huts-and-tours/sac-ro
 
 /** Colours as on the SAC portal map. */
 export const SAC_DISCIPLINES = {
-  mountain_hiking: { name: 'Hiking', colour: '#237100' },
-  alpine_tour: { name: 'Mountaineering', colour: '#9b40de' },
-  climbing: { name: 'Climbing', colour: '#ff3d12' },
-  via_ferrata: { name: 'Via ferrata', colour: '#ff8800' },
-  ski_tour: { name: 'Ski touring', colour: '#0033ff' },
-  snowshoe_tour: { name: 'Snowshoe', colour: '#008a79' },
-} as const;
+  mountain_hiking: { name: 'Hiking', colour: '#237100', scale: 'hiking' },
+  alpine_tour: { name: 'Mountaineering', colour: '#9b40de', scale: 'alpine' },
+  climbing: { name: 'Climbing', colour: '#ff3d12', scale: null }, // crags, not lines: nothing to filter
+  via_ferrata: { name: 'Via ferrata', colour: '#ff8800', scale: 'ferrata' },
+  ski_tour: { name: 'Ski touring', colour: '#0033ff', scale: 'alpine' },
+  snowshoe_tour: { name: 'Snowshoe', colour: '#008a79', scale: 'snowshoe' },
+} as const satisfies Record<string, { name: string; colour: string; scale: Scale | null }>;
 export type SacDiscipline = keyof typeof SAC_DISCIPLINES;
 
 const SOURCE = 'sac-routes';
@@ -51,6 +52,13 @@ export class SacRoutes {
   private timer: number | undefined;
   private request = 0;
   private drawn: GeoJSON.Feature[] = [];
+  /** Per discipline: only routes within these limits are shown. */
+  readonly filters = new Map<SacDiscipline, RouteFilter>();
+  /** Looked up as filters need them: a route's grade (null: none given) and height gain. */
+  private grades = new Map<number, string | null>();
+  private climbs = new Map<number, number | null>();
+  private hidden = new Set<number>();
+  private filterRun = 0;
 
   constructor(
     private map: maplibregl.Map,
@@ -73,13 +81,74 @@ export class SacRoutes {
     this.schedule(0);
   }
 
+  /** Limits one discipline's routes to a range of grades and of height gain (null: no limit). */
+  setFilter(discipline: SacDiscipline, filter: RouteFilter | null): void {
+    if (isActive(filter ?? undefined)) this.filters.set(discipline, filter!);
+    else this.filters.delete(discipline);
+    void this.applyFilters();
+  }
+
+  /**
+   * Works out which drawn routes the filters hide. Grades come from the SAC portal (one request
+   * per 150 routes), height gain is measured along the line; both only for disciplines that are
+   * filtered on them, and routes stay visible until their values are known.
+   */
+  private async applyFilters(): Promise<void> {
+    const run = ++this.filterRun;
+    const idOf = (f: GeoJSON.Feature) => Number(f.properties?.route_id);
+    const filtered = this.drawn.filter((f) => f.geometry.type === 'LineString' && this.enabled.has(f.properties?.type) && this.filters.has(f.properties?.type));
+    const update = () => {
+      const hidden = new Set<number>();
+      for (const f of filtered) {
+        const id = idOf(f);
+        const discipline = f.properties?.type as SacDiscipline;
+        const scale = SAC_DISCIPLINES[discipline].scale;
+        const grade = this.grades.get(id);
+        const rank = grade === undefined ? undefined : scale ? gradeRank(scale, grade) : null;
+        if (!passes(this.filters.get(discipline)!, rank, this.climbs.get(id))) hidden.add(id);
+      }
+      const changed = hidden.size !== this.hidden.size || [...hidden].some((id) => !this.hidden.has(id));
+      this.hidden = hidden;
+      if (changed) {
+        this.filterVersion++;
+        this.applyFilter();
+      }
+    };
+    update();
+
+    const needGrade = [...new Set(filtered.filter((f) => filtersGrade(this.filters.get(f.properties?.type)!) && !this.grades.has(idOf(f))).map(idOf))];
+    for (let i = 0; i < needGrade.length; i += 150) {
+      const ids = needGrade.slice(i, i + 150);
+      try {
+        const data = await fetch(`${API}/route/search?lang=en&output_lang=en&limit=200&id=${ids.join(',')}`).then((r) => r.json());
+        for (const route of (data.results ?? []) as { id: number; main_difficulty?: string }[]) this.grades.set(Number(route.id), route.main_difficulty ?? null);
+        for (const id of ids) if (!this.grades.has(id)) this.grades.set(id, null);
+      } catch {
+        this.onError('SAC route grades could not be loaded: the difficulty filter is incomplete.');
+        break;
+      }
+      if (run !== this.filterRun) return;
+      update();
+    }
+
+    const needClimb = [...new Set(filtered.filter((f) => filtersClimb(this.filters.get(f.properties?.type)!) && !this.climbs.has(idOf(f))).map(idOf))];
+    for (const [n, id] of needClimb.entries()) {
+      const lines = this.drawn.filter((f) => idOf(f) === id && !f.properties?.alternative && f.geometry.type === 'LineString').map((f) => (f.geometry as GeoJSON.LineString).coordinates as [number, number][]);
+      this.climbs.set(id, await mainClimb(lines).catch(() => null));
+      if (run !== this.filterRun) return;
+      if (n % 25 === 24) update();
+    }
+    update();
+  }
+  private filterVersion = 0;
+
   /** Lines of the enabled disciplines currently on the map, for routing along them. Changes identity when the set changes. */
   routable(): [number, number][][] {
-    const key = `${this.request}:${[...this.enabled].join()}`;
+    const key = `${this.request}:${this.filterVersion}:${[...this.enabled].join()}`;
     if (key !== this.routableKey) {
       this.routableKey = key;
       this.routableLines = this.drawn
-        .filter((f) => this.enabled.has(f.properties?.type) && f.geometry.type === 'LineString')
+        .filter((f) => this.enabled.has(f.properties?.type) && f.geometry.type === 'LineString' && !this.hidden.has(Number(f.properties?.route_id)))
         .map((f) => (f.geometry as GeoJSON.LineString).coordinates as [number, number][]);
     }
     return this.routableLines;
@@ -127,7 +196,7 @@ export class SacRoutes {
 
   private applyFilter(): void {
     if (!this.map.getLayer(LINE_LAYERS[0])) return;
-    const wanted = ['in', ['get', 'type'], ['literal', [...this.enabled]]];
+    const wanted = ['all', ['in', ['get', 'type'], ['literal', [...this.enabled]]], ['!', ['in', ['get', 'route_id'], ['literal', [...this.hidden]]]]];
     const dashed = ['in', ['get', 'style'], ['literal', ['dashed', 'dotted']]];
     this.map.setFilter(LINE_LAYERS[0], wanted as never);
     this.map.setFilter(LINE_LAYERS[1], ['all', wanted, ['!', dashed]] as never);
@@ -170,6 +239,7 @@ export class SacRoutes {
     const cells = loaded.filter((c): c is Cell => c !== null);
     this.drawn = unique(cells.flatMap((c) => c.lines));
     (this.map.getSource(SOURCE) as GeoJSONSource).setData({ type: 'FeatureCollection', features: this.drawn });
+    if (this.filters.size) void this.applyFilters();
     (this.map.getSource(POINTS) as GeoJSONSource).setData({ type: 'FeatureCollection', features: unique(cells.flatMap((c) => c.points)) });
   }
 

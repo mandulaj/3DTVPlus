@@ -7,6 +7,8 @@ import { PRESETS, type Preset } from '../layers/presets';
 import { SNOW_PRODUCTS, STATION_TYPES, type Legend, type SlfLayers, type SnowProduct, type StationType } from '../layers/slf';
 import { WATER_LAYERS } from '../map';
 import { unofficial } from '../unofficial';
+import type { RouteFilter } from '../layers/routeFilter';
+import { routeFilterUi, type RouteFilterUi } from './routeFilterUi';
 import { h, info, slider } from './dom';
 
 export interface SlfState {
@@ -140,6 +142,13 @@ export class Panel {
 
   private sacBody = h('div', { class: 'section-body sac-body' });
   onCamptocamp: (on: boolean) => void = () => {};
+  onCamptocampFilter: (filter: RouteFilter | null) => void = () => {};
+  private filterUis = new Map<string, RouteFilterUi>();
+
+  /** Show a route filter that was set elsewhere (restored from the page address). Key: SAC discipline or "c2c". */
+  showRouteFilter(key: string, filter: RouteFilter | null): void {
+    this.filterUis.get(key)?.set(filter);
+  }
   camptocampHint = h('div', { class: 'muted' });
   camptocampBox = h('input', { type: 'checkbox', onchange: () => this.onCamptocamp(this.camptocampBox.checked) });
   private settingsSection: HTMLElement | null = null;
@@ -152,18 +161,26 @@ export class Panel {
     wrapper.querySelector('.section-body')?.replaceWith(this.sacBody);
     const swatch = h('i', { class: 'swatch' });
     swatch.style.background = '#e8590c';
+    const c2cFilter = routeFilterUi('french', null, 'Height gain as listed on Camptocamp', (value) => this.onCamptocampFilter(value));
+    this.filterUis.set('c2c', c2cFilter);
     wrapper.append(
       h(
         'div',
         { class: 'section-body' },
         h(
-          'label',
-          { class: 'row' },
-          this.camptocampBox,
-          swatch,
-          h('span', {}, 'Camptocamp ski tours'),
-          info('Ski touring routes from camptocamp.org (CC BY-SA), as a copy stored with this site: Switzerland, not updated live. Dots are routes without a drawn line. Click for details and a link. The route planner follows the lines.'),
+          'div',
+          { class: 'filter-row' },
+          h(
+            'label',
+            { class: 'row' },
+            this.camptocampBox,
+            swatch,
+            h('span', {}, 'Camptocamp ski tours'),
+            info('Ski touring routes from camptocamp.org (CC BY-SA), as a copy stored with this site: Switzerland, not updated live. Dots are routes without a drawn line. Click for details and a link. The route planner follows the lines. The filter uses Camptocamp\'s overall grade (F to ED).'),
+          ),
+          c2cFilter.toggle,
         ),
+        c2cFilter.body,
         this.camptocampHint,
       ),
     );
@@ -180,7 +197,8 @@ export class Panel {
       );
       return;
     }
-    const rows = (Object.entries(SAC_DISCIPLINES) as [SacDiscipline, { name: string; colour: string }][]).map(([id, discipline]) => {
+    const rows = (Object.keys(SAC_DISCIPLINES) as SacDiscipline[]).flatMap((id) => {
+      const discipline = SAC_DISCIPLINES[id];
       const swatch = h('i', { class: 'swatch' });
       swatch.style.background = discipline.colour;
       const box = h('input', {
@@ -192,7 +210,14 @@ export class Panel {
         },
       });
       this.sacBoxes.set(id, box);
-      return h('label', { class: 'row' }, box, swatch, h('span', {}, discipline.name));
+      const label = h('label', { class: 'row' }, box, swatch, h('span', {}, discipline.name));
+      if (!discipline.scale) return [label];
+      const filter = routeFilterUi(discipline.scale, this.sac.filters.get(id) ?? null, 'Height gain measured along the line on the map (takes a moment for many routes)', (value) => {
+        this.sac.setFilter(id, value);
+        this.onStateChange();
+      });
+      this.filterUis.set(id, filter);
+      return [h('div', { class: 'filter-row' }, label, filter.toggle), filter.body];
     });
     this.sacBody.replaceChildren(...rows, this.sacHint);
   }

@@ -108,6 +108,27 @@ export async function trackStats(
   return stats.length ? stats : null;
 }
 
+/**
+ * Height gain of a route for comparing routes: that of its longest continuous path, from its
+ * lower to its higher end. (Summing all pieces would count a separate descent line as climbing.)
+ */
+export async function mainClimb(lines: Point[][], heightsOf: (points: Point[]) => Promise<number[]> = elevations): Promise<number | null> {
+  let best: Point[] | null = null;
+  let longest = 0;
+  for (const path of joinLines(lines)) {
+    let length = 0;
+    for (let i = 1; i < path.length; i++) length += metres(path[i - 1], path[i]);
+    if (length > longest) {
+      longest = length;
+      best = path;
+    }
+  }
+  if (!best) return null;
+  const heights = await heightsOf(resample(best, 50));
+  if (heights[0] > heights[heights.length - 1]) heights.reverse();
+  return climb(heights).up;
+}
+
 /** "4.2 km · ↑ 850 m · ↓ 120 m · 1650–2480 m" */
 export function describeStats(s: TrackStats): string {
   const km = s.length >= 10000 ? (s.length / 1000).toFixed(0) : (s.length / 1000).toFixed(1);

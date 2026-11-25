@@ -7,6 +7,7 @@ import { interaction } from '../interaction';
 import { SLOT } from '../map';
 import { describeStats, linesOf, trackStats } from '../trackStats';
 import { cellsInView } from './camptocampCells';
+import { gradeRank, isActive, passes, type RouteFilter } from './routeFilter';
 
 const DATA = './data/camptocamp';
 const ACTIVITY = 'skitouring';
@@ -37,7 +38,9 @@ export class Camptocamp {
   private index: { fetched: string; cells: Set<string>; size: number } | null = null;
   private ready: Promise<boolean> | null = null;
   private cells = new Map<string, GeoJSON.Feature[] | Promise<GeoJSON.Feature[]>>();
-  private drawn: GeoJSON.Feature[] = [];
+  private loaded: GeoJSON.Feature[] = []; // all routes of the cells in view
+  private drawn: GeoJSON.Feature[] = []; // those of them the filter lets through
+  filter: RouteFilter | null = null;
   private lines: [number, number][][] = [];
   private timer: number | undefined;
   private request = 0;
@@ -127,11 +130,23 @@ export class Camptocamp {
     if (token !== this.request) return;
     if (loaded.some((cell) => cell === null)) this.onError('Some Camptocamp routes could not be loaded.');
     this.onHint(all > names.length ? 'Camptocamp routes shown near the map centre only: zoom in for the rest.' : names.length ? null : 'No Camptocamp routes stored for this area (Switzerland only).');
-    const drawn = loaded.flatMap((cell) => cell ?? []);
-    if (drawn.length === this.drawn.length && drawn.every((feature, i) => feature === this.drawn[i])) return; // same cells as before
-    this.drawn = drawn;
-    this.lines = drawn.flatMap((feature) => linesOf(feature.geometry));
-    (this.map.getSource(SOURCE) as GeoJSONSource).setData({ type: 'FeatureCollection', features: drawn });
+    const routes = loaded.flatMap((cell) => cell ?? []);
+    if (routes.length === this.loaded.length && routes.every((feature, i) => feature === this.loaded[i])) return; // same cells as before
+    this.loaded = routes;
+    this.redraw();
+  }
+
+  /** Limits the routes shown to a range of grades (Camptocamp's overall grade) and of listed height gain. */
+  setFilter(filter: RouteFilter | null): void {
+    this.filter = isActive(filter ?? undefined) ? filter : null;
+    this.redraw();
+  }
+
+  private redraw(): void {
+    const filter = this.filter;
+    this.drawn = filter ? this.loaded.filter((f) => passes(filter, gradeRank('french', f.properties?.rating), f.properties?.up ?? null)) : this.loaded;
+    this.lines = this.drawn.flatMap((feature) => linesOf(feature.geometry));
+    (this.map.getSource(SOURCE) as GeoJSONSource | undefined)?.setData({ type: 'FeatureCollection', features: this.drawn });
   }
 
   private cell(name: string): Promise<GeoJSON.Feature[]> {

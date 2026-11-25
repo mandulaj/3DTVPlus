@@ -40,6 +40,9 @@ It only pulls tiles and data from the public services listed below.
   (half-degree cells, loaded for the area in view). Refresh or widen it with
   `node scripts/fetch-camptocamp.mjs [west south east north] [activity]`. Needs a web server: the files are not
   reachable when `index.html` is opened directly from disk.
+- **Route filters**: "Filter" beside each kind of SAC route and beside Camptocamp limits the routes on the map
+  to a range of grades (T1–T6, L–EX, WT1–WT6, K1–K6; Camptocamp F–ED) and of ascent. SAC grades are looked up
+  at the SAC portal and SAC ascent is measured along the line, both only while such a filter is set.
 - **More controls**: Ctrl+middle-drag swings the camera around the point under the cursor; double middle-click
   puts north up; Shift+wheel moves forward and back keeping height above ground; Alt+wheel changes the time of
   day while sunlight is on (Alt+Shift: single minutes). Keys: W A S D move, Q E turn, R F tilt (Shift: faster),

@@ -31,8 +31,12 @@ It only pulls tiles and data from the public services listed below.
   follow the sun, and the sun disc is drawn in the sky ("Face sun" turns the camera toward it). Shadows are
   computed from the elevation data in web workers, including earth curvature and peaks far outside the view.
   On the globe the night side is shaded.
-- **Look around**: Shift+drag turns the camera in place (up to just below the horizon), e.g. to look up a
-  mountain from the valley floor. Normal tilt (Ctrl+drag / right-drag) stops at 78°.
+- **Look around**: Shift+drag or middle-button drag turns the camera in place (up to just below the horizon),
+  e.g. to look up a mountain from the valley floor. Normal tilt (Ctrl+drag / right-drag) stops at 78°.
+- **More controls**: Ctrl+middle-drag swings the camera around the point under the cursor; double middle-click
+  puts north up; Shift+wheel moves forward and back keeping height above ground; Alt+wheel changes the time of
+  day while sunlight is on (Alt+Shift: single minutes). Keys: W A S D move, Q E turn, R F tilt (Shift: faster),
+  N north up, L look mode.
 - **Tracks**: drop GPX, TCX or FIT files on the page to draw them on the terrain. They stay in the browser
   (local storage, about 5 MB) and are restored after a reload.
 - **Presets**: one-click layer sets (ski touring, snowshoe, avalanche terrain, snow conditions, hiking, biking,
@@ -52,6 +56,11 @@ It only pulls tiles and data from the public services listed below.
 - **Recorded tracks**: heights and times in GPX/TCX/FIT files are kept. Viewing such a track shows recorded time,
   moving time, speed and pace, can switch the profile to recorded heights, colour by speed, and exports the
   recording unchanged. Editing turns it into a plain route.
+- **Weather forecast**: for towns and summits in view, weather symbol, lowest/highest temperature and wind for a
+  day chosen from a row of eight; model forecast from Open-Meteo (MeteoSwiss ICON model in and around
+  Switzerland), summit values adjusted to summit height. Not MeteoSwiss's own edited forecast.
+- **Quick search**: Ctrl+F (or `/`, or the 🔍 button) finds peaks, towns, huts and lakes by name, typos allowed
+  (OpenStreetMap via Photon); empty box suggests the highest peaks in view.
 - **Touch**: on phones the layer panel and planner adapt; taps add points ("Done" finishes), drag and pinch work
   on the profile, a long press opens the map popup, and the eye button makes dragging turn the camera in place.
 - **SAC routes**: hiking, mountaineering, climbing, via ferrata, ski touring and snowshoe routes from the SAC route

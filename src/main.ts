@@ -1,11 +1,14 @@
 import './ui/style.css';
 import * as maplibregl from 'maplibre-gl';
-import { createMap, readHash, writeHash } from './map';
+import { createMap, readHash, watchVectorSource, writeHash } from './map';
+import { enableKeys } from './keys';
 import { enableLookAround } from './lookAround';
 import { enableTrackDrop } from './tracks';
 import { PeakLabels } from './peaks';
 import { Planner } from './planner';
 import { enableContextMenu } from './contextMenu';
+import { enableSearch } from './search';
+import { Weather } from './weather';
 import { decodeShare, decodeTrack, encodeShare, encodeTrack, type SharedView } from './share';
 import { parseTrack } from './trackFiles';
 import { DEFAULT_BASE, byId } from './layers/catalog';
@@ -14,7 +17,7 @@ import { SNOW_PRODUCTS, STATION_TYPES, SlfLayers, type SnowProduct, type Station
 import { SunController } from './sun/sun';
 import { Panel, type SlfState, type TerrainState } from './ui/panel';
 import { SunControls } from './ui/sunControls';
-import { toast } from './ui/dom';
+import { h, toast } from './ui/dom';
 import { unofficial } from './unofficial';
 import { enableRouteInfo } from './layers/routes';
 import { Skitourenguru } from './layers/skitourenguru';
@@ -38,7 +41,9 @@ let sharedError = '';
 }
 
 const map = createMap('map');
+watchVectorSource(map);
 const look = enableLookAround(map);
+enableKeys(map, look);
 const layers = new LayerManager(map);
 const slf = new SlfLayers(map);
 const guru = new Skitourenguru(map, slf.popup);
@@ -67,13 +72,14 @@ for (const part of (hash.get('slf') ?? '').split(',').filter(Boolean)) {
   }
 }
 
-const terrain: TerrainState = { exaggeration: 1, hillshade: 0.35, colorRelief: false, water: true, peaks: false };
-const [exaggeration, hillshade, relief, water, peakLabels] = (hash.get('terrain') ?? '').split('~');
+const terrain: TerrainState = { exaggeration: 1, hillshade: 0.35, colorRelief: false, colorReliefOpacity: 0.5, water: true, peaks: false };
+const [exaggeration, hillshade, relief, water, peakLabels, reliefOpacity] = (hash.get('terrain') ?? '').split('~');
 if (Number(exaggeration) >= 1 && Number(exaggeration) <= 3) terrain.exaggeration = Number(exaggeration);
 if (hillshade !== undefined && hillshade !== '' && Number(hillshade) >= 0 && Number(hillshade) <= 1) terrain.hillshade = Number(hillshade);
 terrain.colorRelief = relief === '1';
 terrain.water = water !== '0';
 terrain.peaks = peakLabels === '1';
+if (Number(reliefOpacity) >= 0.1 && Number(reliefOpacity) <= 1) terrain.colorReliefOpacity = Number(reliefOpacity);
 
 const sunTime = hash.get('sun') ? new Date(hash.get('sun')!) : null;
 if (sunTime && !Number.isNaN(sunTime.getTime())) sun.time = sunTime;
@@ -94,8 +100,8 @@ function saveState(): void {
     slf: slfParts.join(',') || null,
     sac: [...sac.enabled].join(',') || null,
     terrain:
-      terrain.exaggeration !== 1 || terrain.hillshade !== 0.35 || terrain.colorRelief || !terrain.water || terrain.peaks
-        ? `${terrain.exaggeration}~${terrain.hillshade}~${terrain.colorRelief ? 1 : 0}~${terrain.water ? 1 : 0}~${terrain.peaks ? 1 : 0}`
+      terrain.exaggeration !== 1 || terrain.hillshade !== 0.35 || terrain.colorRelief || !terrain.water || terrain.peaks || terrain.colorReliefOpacity !== 0.5
+        ? `${terrain.exaggeration}~${terrain.hillshade}~${terrain.colorRelief ? 1 : 0}~${terrain.water ? 1 : 0}~${terrain.peaks ? 1 : 0}~${terrain.colorReliefOpacity}`
         : null,
     // local wall-clock time, so a shared link shows the same hour on the slider
     sun: sun.enabled ? `${t.getFullYear()}-${pad(t.getMonth() + 1)}-${pad(t.getDate())}T${pad(t.getHours())}:${pad(t.getMinutes())}` : null,
@@ -107,9 +113,23 @@ map.once('load', async () => {
   const sunControls = new SunControls(document.getElementById('sunbar')!, sun, () => {
     panel.setReliefScale(sun.enabled ? 0.4 : 1);
     saveState();
-  });
+  }, map);
   panel.applyTerrain();
   const peaks = new PeakLabels(map, look);
+  const weather = new Weather(map);
+  weather.onChange = saveWeather;
+  panel.onWeather = (on) => {
+    weather.setEnabled(on);
+    saveWeather();
+  };
+  function saveWeather(): void {
+    writeHash({ wx: weather.enabled ? String(weather.day) : null });
+  }
+  if (hash.get('wx') !== null) {
+    weather.day = Math.min(7, Math.max(0, Number(hash.get('wx')) || 0));
+    panel.weatherBox.checked = true;
+    weather.setEnabled(true);
+  }
   panel.onPeaks = (on) => peaks.setEnabled(on);
   if (terrain.peaks) peaks.setEnabled(true);
   const tracks = enableTrackDrop(map, document.getElementById('panel')!);
@@ -138,6 +158,7 @@ map.once('load', async () => {
   slf.onSnowChange = () => planner.refresh();
   slf.onBulletinChange = () => planner.refresh();
   enableContextMenu(map, slf.popup, planner, look);
+  enableSearch(map);
   Object.assign(window, { planner });
   panel.onPlan = () => (planner.isOpen ? planner.close() : planner.open());
 
@@ -159,7 +180,13 @@ map.once('load', async () => {
   panel.syncSac();
   if (hash.get('sun')) sunControls.setEnabled(true);
 
+  const mapyLogo = h('a', { class: 'mapy-logo', href: 'https://mapy.com/', target: '_blank', rel: 'noopener', title: 'Map by Mapy.com' }, h('img', { src: 'https://api.mapy.com/img/api/logo.svg', alt: 'Mapy.com' }));
+  mapyLogo.hidden = true;
+  document.body.append(mapyLogo);
+  const showMapyLogo = () => (mapyLogo.hidden = !layers.baseId?.startsWith('mapy-'));
+  showMapyLogo();
   layers.onChange = () => {
+    showMapyLogo();
     panel.syncBase();
     saveState();
   };

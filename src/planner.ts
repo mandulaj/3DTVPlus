@@ -92,9 +92,18 @@ function metres(a: Point, b: Point): number {
 const lengthOf = (coords: Point[]) => coords.reduce((sum, c, i) => (i ? sum + metres(coords[i - 1], c) : 0), 0);
 
 /** A path between two points along OpenStreetMap trails, or null unless both lie within `reach` metres of one. */
+let routerNotice = 0;
+/** Says once in a while that the path service is not answering, so straight legs are no surprise. */
+function routerDown(): void {
+  if (Date.now() - routerNotice < 120000) return;
+  routerNotice = Date.now();
+  toast('Path lookup (BRouter) is not answering: legs run straight for now. SAC routes on the map still work.', 'info');
+}
+
 async function routed(a: Point, b: Point, reach: number): Promise<Point[] | null> {
   try {
     const response = await fetch(`${ROUTER}?lonlats=${a.join(',')}|${b.join(',')}&profile=${PROFILE}&alternativeidx=0&format=geojson`);
+    if (response.status >= 500 || response.status === 429) routerDown();
     if (!response.ok) return null; // e.g. no path within reach of a point
     const coords = ((await response.json()).features?.[0]?.geometry?.coordinates ?? []) as number[][];
     if (coords.length < 2) return null;
@@ -106,6 +115,7 @@ async function routed(a: Point, b: Point, reach: number): Promise<Point[] | null
     if (lengthOf(path) > 6 * metres(a, b) + 500) return null;
     return path;
   } catch {
+    routerDown(); // no connection to the service
     return null;
   }
 }
@@ -145,6 +155,9 @@ export class Planner {
   private stats = h('div', { class: 'plan-stats' });
   private chart = h('div', { class: 'plan-chart' });
   private hint = h('div', { class: 'muted plan-hint' });
+  /** Values under the cursor, on a line of their own above the profile so they cover nothing. */
+  private readout = h('span', { class: 'plan-readout' });
+  private readoutRow = h('div', { class: 'plan-readout-row' }, this.readout);
   private hover = new maplibregl.Marker({ element: h('div', { class: 'plan-hover' }) });
   /** `angle`: terrain steepness in degrees at each sample (empty if unknown). */
   private profile: { coords: Point[]; distance: number[]; height: number[]; terrain: number[]; angle: number[]; recEle: number[] | null; time: (number | null)[] | null } | null = null;
@@ -241,6 +254,7 @@ export class Planner {
         button('Export GPX', 'Download the route as a GPX file', () => this.exportGpx(), 'always'),
         button('✕', 'Close the planner', () => this.close(), 'always'),
       ),
+      this.readoutRow,
       h('div', { class: 'plan-body' }, this.stats, this.chart),
       this.hint,
     );
@@ -284,7 +298,10 @@ export class Planner {
       this.render();
     });
     this.chart.addEventListener('pointermove', (event) => this.onChartHover(event));
-    this.chart.addEventListener('pointerleave', () => this.hover.remove());
+    this.chart.addEventListener('pointerleave', () => {
+      this.hover.remove();
+      this.readout.textContent = '';
+    });
   }
 
   /** Redraw statistics and profile (something they depend on changed outside). */
@@ -1339,7 +1356,6 @@ export class Planner {
       ...labels,
       extreme(p.height.indexOf(highest, firstShown), '▲', 'high'),
       extreme(p.height.indexOf(lowest, firstShown), '▼', 'low'),
-      h('span', { class: 'plan-readout' }),
     );
     if (mode === 'snow' && snow) this.chart.append(h('span', { class: 'plan-snow-label', title: 'From the snow map shown on the map; grey: no snow or no data' }, `${snow.name} (${snow.unit})`));
     if (mode === 'danger') this.chart.append(h('span', { class: 'plan-snow-label', title: 'Danger level of the bulletin region; paler outside the altitudes its avalanche problems are described for. Orientation only.' }, 'Avalanche danger (bulletin)'));
@@ -1397,7 +1413,7 @@ export class Planner {
     cursor.setAttribute('x1', String(fraction * 1000));
     cursor.setAttribute('x2', String(fraction * 1000));
     cursor.setAttribute('visibility', 'visible');
-    const readout = this.chart.querySelector<HTMLElement>('.plan-readout')!;
+    const readout = this.readout;
     const slope = this.slopes[i] ?? 0;
     const sampler = this.options.snow();
     const snowValue = this.snow[i];
@@ -1411,7 +1427,10 @@ export class Planner {
       snowText += ` · ${new Date(when).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}${v != null ? ` · ${(v * 3.6).toFixed(1)} km/h` : ''}`;
     }
     readout.textContent = `${(p.distance[i] / 1000).toFixed(2)} km · ${Math.round(p.height[i])} m · ${slope >= 0 ? '+' : '−'}${Math.abs(Math.round(slope * 100))}%${snowText}`;
-    readout.style.left = `${Math.min(88, Math.max(2, fraction * 100))}%`;
+    // Above the cursor, kept inside the row.
+    const row = this.readoutRow.getBoundingClientRect();
+    const half = readout.offsetWidth / 2;
+    readout.style.left = `${Math.min(row.width - half, Math.max(half, box.left - row.left + fraction * box.width))}px`;
     this.hover.setLngLat(p.coords[i]).addTo(this.map);
   }
 

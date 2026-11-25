@@ -6,6 +6,7 @@ import type { GeoJSONSource } from 'maplibre-gl';
 import { interaction } from '../interaction';
 import { SLOT } from '../map';
 import { toLv95, toWgs84 } from '../swissGrid';
+import { describeStats, trackStats } from '../trackStats';
 
 const API = 'https://www.suissealpine.sac-cas.ch/api/1';
 const PORTAL = 'https://www.sac-cas.ch/en/huts-and-tours/sac-route-portal';
@@ -24,6 +25,7 @@ export type SacDiscipline = keyof typeof SAC_DISCIPLINES;
 
 const SOURCE = 'sac-routes';
 const POINTS = 'sac-climbing';
+const HIGHLIGHT = 'sac-highlight';
 const LINE_LAYERS = ['sac-routes-casing', 'sac-routes-plain', 'sac-routes-dashed'];
 const MIN_ZOOM = 10;
 const CELL = 16000; // metres (LV95): one request per cell
@@ -113,6 +115,12 @@ export class SacRoutes {
       },
       SLOT.top,
     );
+    this.map.addSource(HIGHLIGHT, { type: 'geojson', data: empty });
+    this.map.addLayer(
+      { id: HIGHLIGHT, type: 'line', source: HIGHLIGHT, layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#00d5ff', 'line-width': ['interpolate', ['linear'], ['zoom'], 10, 10, 14, 18], 'line-opacity': 0.9 } }, // a wide glow under the route's own line
+      LINE_LAYERS[0],
+    );
+    this.popup.on('close', () => this.highlight([]));
     this.applyFilter();
     this.bind();
   }
@@ -227,17 +235,54 @@ export class SacRoutes {
           const destination = [text(route.destination_poi?.display_name), route.destination_poi?.altitude && `${Math.round(route.destination_poi.altitude)} m`].filter(Boolean).join(', ');
           const link = `${PORTAL}/${route.destination_poi?.id}/${route.type}/${route.id}`;
           return (
-            `<div class="problem"><span class="danger-chip" style="background:${discipline?.colour ?? '#777'};color:#fff">${escapeHtml(discipline?.name ?? route.type)}</span>` +
+            `<div class="problem route-option" data-route="${Number(route.id)}" title="Click to show only this route on the map"><span class="danger-chip" style="background:${discipline?.colour ?? '#777'};color:#fff">${escapeHtml(discipline?.name ?? route.type)}</span>` +
             (route.main_difficulty ? ` <b>${escapeHtml(route.main_difficulty)}</b>` : '') +
             `<div><b style="text-transform:none">${escapeHtml(destination)}</b></div><div>${escapeHtml(text(route.title))}</div>` +
+            `<div class="muted" data-track="${Number(route.id)}"></div>` +
             `<a href="${escapeHtml(link)}" target="_blank" rel="noopener">Open in SAC route portal</a></div>`
           );
         });
         this.popup.setHTML(`<div class="popup"><h3>SAC route${rows.length > 1 ? 's' : ''}</h3>${rows.join('') || '<i>No details available</i>'}<div class="muted">Source: SAC route portal</div></div>`);
+        // All listed routes are marked; clicking one in the list marks that one alone (again: all).
+        const listed = ((data.results ?? []) as any[]).map((route) => Number(route.id));
+        this.highlight(listed);
+        const options = [...(this.popup.getElement()?.querySelectorAll<HTMLElement>('.route-option') ?? [])];
+        for (const option of options) {
+          option.addEventListener('click', (click) => {
+            if ((click.target as HTMLElement).closest('a')) return;
+            const alone = !option.classList.contains('on');
+            for (const other of options) other.classList.toggle('on', alone && other === option);
+            this.highlight(alone ? [Number(option.dataset.route)] : listed);
+          });
+        }
+        void this.measure(ids);
       } catch {
         this.popup.setHTML('<div class="popup">Route details could not be loaded.</div>');
       }
     });
+  }
+
+  /** Marks the given routes on the map (their variants too); none clears the marking. */
+  private highlight(ids: number[]): void {
+    const features = ids.length ? this.drawn.filter((f) => ids.includes(Number(f.properties?.route_id)) && f.geometry.type === 'LineString') : [];
+    (this.map.getSource(HIGHLIGHT) as GeoJSONSource | undefined)?.setData({ type: 'FeatureCollection', features });
+  }
+
+  /** Fills in each listed route's length and height gain, measured along its line on the map. */
+  private async measure(ids: number[]): Promise<void> {
+    for (const id of ids) {
+      const lines = this.drawn
+        .filter((f) => Number(f.properties?.route_id) === id && !f.properties?.alternative && f.geometry.type === 'LineString')
+        .map((f) => (f.geometry as GeoJSON.LineString).coordinates as [number, number][]);
+      if (!lines.length) continue;
+      const stats = await trackStats(lines).catch(() => null);
+      // The popup may show something else by now: then the place to write to is gone.
+      const slot = this.popup.getElement()?.querySelector(`[data-track="${id}"]`);
+      if (stats && slot) {
+        slot.textContent = describeStats(stats);
+        (slot as HTMLElement).title = 'Measured along the line on the map, from its lower to its higher end (variants not counted)';
+      }
+    }
   }
 
   private async showPoi(lngLat: maplibregl.LngLat, id: number): Promise<void> {

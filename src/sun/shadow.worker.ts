@@ -96,8 +96,11 @@ async function decodeWithCanvas(blob: Blob): Promise<{ px: Uint8ClampedArray; si
   return { px: ctx.getImageData(0, 0, size, size).data, size };
 }
 
+const DEM_TIMEOUT_MS = 15000;
+
 async function fetchDem(url: string): Promise<DemTile | null> {
-  const response = await fetch(url);
+  // A download that never finishes must not block the queue behind it for good.
+  const response = await fetch(url, { signal: AbortSignal.timeout(DEM_TIMEOUT_MS) });
   if (response.status === 404 || response.status === 204) return null; // no data: treated as sea level
   if (!response.ok) throw new Error(`DEM ${response.status}`);
   const { px, size } = await decodeRgba(response);

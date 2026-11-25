@@ -1,4 +1,6 @@
-// Shift+drag: turn the camera in place (look up, down and around) instead of MapLibre's box zoom.
+// Shift+drag or middle-button drag: turn the camera in place (look up, down and around) instead of
+// MapLibre's box zoom. Ctrl+middle-button drag swings the camera around the point under the cursor;
+// Shift+wheel moves it forward and back; a double middle click puts north up again.
 // The normal rotate gesture orbits around the point at the screen centre, which from inside a
 // valley swings the camera into the opposite slope; here the camera stays where it is.
 //
@@ -6,6 +8,7 @@
 // the camera in place that centre point has to leave the ground. Zoom and pan need the centre on the ground again: with the centre floating
 // far above terrain MapLibre picks tiles for the wrong distance and requests thousands of them.
 import * as maplibregl from 'maplibre-gl';
+import { ahead, orbit, type Place } from './cameraMath';
 
 const RAD = Math.PI / 180;
 const EARTH_CIRCUMFERENCE = 40075016.686;
@@ -14,6 +17,9 @@ const DEGREES_PER_PIXEL = 0.12;
 // 90 would be level with the horizon. Beyond it MapLibre requests thousands of tiles and stalls,
 // and from a high viewpoint the picture already breaks up around 88.
 const LOOK_MAX_PITCH = 86;
+const MIN_HEIGHT = 30; // metres the camera stays above the ground when it is moved or swung around
+const DOUBLE_CLICK_MS = 350;
+const RESET_PITCH = 45;
 const MIN_ZOOM = 11; // further out the map is a globe and the flat-earth geometry used here no longer holds
 
 export interface LookAround {
@@ -25,6 +31,8 @@ export interface LookAround {
   standAt(lngLat: maplibregl.LngLatLike, altitude: number, bearing: number, pitch: number): void;
   /** Fly the camera to a point in space, facing the direction of travel, and end looking at `pitch`. */
   flyTo(lngLat: maplibregl.LngLatLike, altitude: number, pitch: number): void;
+  /** Switch look mode (plain drag turns the camera) on or off, as its button does. */
+  toggleLookMode(): void;
 }
 
 interface Eye {
@@ -36,7 +44,9 @@ export function enableLookAround(map: maplibregl.Map): LookAround {
   map.boxZoom.disable();
   const canvas = map.getCanvasContainer();
   const groundMaxPitch = map.getMaxPitch();
-  let drag: { x: number; y: number; bearing: number; pitch: number } | null = null;
+  let drag: { x: number; y: number; bearing: number; pitch: number; mode: 'look' | 'orbit' | 'plain'; middle: boolean; pivot?: Place; from?: Place } | null = null;
+  let lastMiddleClick = { x: 0, y: 0, time: -Infinity };
+  let glideTimer: number | undefined;
   // Camera position while the view centre is detached from the ground. It is worked out once, from
   // an ordinary view (centre on the ground, a few km away) where the simple geometry below is
   // accurate, and stays valid because every other gesture first returns to an ordinary view.
@@ -118,36 +128,129 @@ export function enableLookAround(map: maplibregl.Map): LookAround {
     turning = false;
   }
 
+  /** Height of the ground at a place, or null where the terrain is not loaded. */
+  function groundAt(at: { lng: number; lat: number }): number | null {
+    const height = map.queryTerrainElevation([at.lng, at.lat]);
+    return height == null || !Number.isFinite(height) ? null : height;
+  }
+
+  const placeOf = (at: Eye): Place => ({ lng: at.position.lng, lat: at.position.lat, altitude: at.altitude });
+  const eyeOf = (place: Place): Eye => ({ position: new maplibregl.LngLat(place.lng, place.lat), altitude: place.altitude });
+
+  /** The ground under a screen point (the screen centre if that point shows sky), to swing the camera around. */
+  function pivotAt(x: number, y: number): Place {
+    const box = map.getCanvas().getBoundingClientRect();
+    const point = { x: x - box.left, y: y - box.top };
+    // A screen point showing sky has no ground under it: the place found for it does not project back to it.
+    const found = map.unproject([point.x, point.y]);
+    const back = map.project(found);
+    const onTerrain = Math.hypot(back.x - point.x, back.y - point.y) < 3;
+    const at = onTerrain ? found : map.getCenter();
+    return { lng: at.lng, lat: at.lat, altitude: (onTerrain ? groundAt(at) : null) ?? map.getCenterElevation() };
+  }
+
   canvas.addEventListener(
     'mousedown',
     (event) => {
-      if (!(event.shiftKey || lookMode) || event.button !== 0) return;
-      event.preventDefault();
+      const middle = event.button === 1;
+      const pivoting = middle && (event.ctrlKey || event.metaKey);
+      if (!middle && !((event.shiftKey || lookMode) && event.button === 0)) return;
+      event.preventDefault(); // also: no autoscroll on the middle button
       event.stopPropagation(); // keep MapLibre's own drag handlers out
-      if (map.getZoom() < MIN_ZOOM) return;
       map.stop();
       flightToken++; // taking over from a flight in progress
-      release();
-      drag = { x: event.clientX, y: event.clientY, bearing: map.getBearing(), pitch: map.getPitch() };
-      canvas.style.cursor = 'move';
+      clearTimeout(glideTimer);
+      const start = { x: event.clientX, y: event.clientY, middle };
+      if (map.getZoom() < MIN_ZOOM) {
+        // On the globe there is no standing in a valley: the middle button just turns and tilts the view.
+        if (!middle) return;
+        drag = { ...start, bearing: map.getBearing(), pitch: map.getPitch(), mode: 'plain' };
+      } else if (pivoting) {
+        anchor(true); // an ordinary view first: the point under the cursor is found from it
+        const pivot = pivotAt(event.clientX, event.clientY);
+        const from = placeOf(locateEye());
+        release();
+        drag = { ...start, bearing: map.getBearing(), pitch: map.getPitch(), mode: 'orbit', pivot, from };
+      } else {
+        release();
+        drag = { ...start, bearing: map.getBearing(), pitch: map.getPitch(), mode: 'look' };
+      }
+      canvas.style.cursor = drag.mode === 'look' ? 'move' : 'grabbing';
       window.addEventListener('mousemove', onMove);
       window.addEventListener('mouseup', onUp, { once: true });
     },
     true,
   );
+  canvas.addEventListener('auxclick', (event) => event.preventDefault()); // no paste on middle click
 
   function onMove(event: MouseEvent): void {
-    if (!drag || !eye) return;
-    // The scene follows the cursor: drag down to look up, drag right to look left.
-    turn(eye, drag.bearing - (event.clientX - drag.x) * DEGREES_PER_PIXEL, drag.pitch + (event.clientY - drag.y) * DEGREES_PER_PIXEL);
+    if (!drag) return;
+    const dx = (event.clientX - drag.x) * DEGREES_PER_PIXEL;
+    const dy = (event.clientY - drag.y) * DEGREES_PER_PIXEL;
+    if (drag.mode === 'look') {
+      // The scene follows the cursor: drag down to look up, drag right to look left.
+      if (eye) turn(eye, drag.bearing - dx, drag.pitch + dy);
+      return;
+    }
+    // Turning around a point: drag sideways to go round it, up to come down toward the horizon.
+    const pitch = Math.min(groundMaxPitch, Math.max(0, drag.pitch - dy));
+    if (drag.mode === 'plain') {
+      map.jumpTo({ bearing: drag.bearing + dx, pitch });
+      return;
+    }
+    const to = orbit(drag.from!, drag.pivot!, drag.bearing, dx, pitch - drag.pitch);
+    const ground = groundAt(to);
+    if (ground != null && to.altitude < ground + MIN_HEIGHT) return; // would go into the mountain
+    eye = eyeOf(to);
+    turn(eye, drag.bearing + dx, pitch);
   }
 
-  function onUp(): void {
+  function onUp(event: MouseEvent): void {
+    const ended = drag;
     drag = null;
     canvas.style.cursor = '';
     window.removeEventListener('mousemove', onMove);
-    anchor();
+    anchor(ended?.mode === 'orbit');
+    if (!ended?.middle || Math.hypot(event.clientX - ended.x, event.clientY - ended.y) > 4) return;
+    // A middle click without dragging; two in a row put north up again.
+    const now = performance.now();
+    if (now - lastMiddleClick.time < DOUBLE_CLICK_MS && Math.hypot(event.clientX - lastMiddleClick.x, event.clientY - lastMiddleClick.y) < 6) {
+      lastMiddleClick.time = -Infinity;
+      anchor(true);
+      map.easeTo({ bearing: 0, pitch: Math.min(RESET_PITCH, groundMaxPitch), duration: 600 });
+    } else {
+      lastMiddleClick = { x: event.clientX, y: event.clientY, time: now };
+    }
   }
+
+  // Shift+wheel: move the camera forward or back over the terrain, keeping its direction and its
+  // height above the ground (the plain wheel zooms toward the point under the cursor instead).
+  canvas.addEventListener(
+    'wheel',
+    (event) => {
+      if (!event.shiftKey || event.altKey || event.ctrlKey || event.metaKey || drag || map.getZoom() < MIN_ZOOM) return;
+      event.preventDefault();
+      event.stopImmediatePropagation(); // not a zoom, and the view must not be settled between notches
+      map.stop();
+      flightToken++;
+      const from = release();
+      const bearing = map.getBearing();
+      const pitch = map.getPitch();
+      const delta = event.deltaY || event.deltaX; // with Shift held, browsers report the wheel as sideways
+      const ground = groundAt(from.position);
+      const height = ground == null ? null : Math.max(MIN_HEIGHT, from.altitude - ground);
+      // A step in proportion to how far away the scenery in view is.
+      const reach = (height ?? 500) / Math.max(Math.cos(pitch * RAD), 0.15);
+      const to = ahead(placeOf(from), bearing, -Math.sign(delta) * Math.min(1, Math.abs(delta) / 100) * reach * 0.1);
+      const groundThere = groundAt(to);
+      if (height != null && groundThere != null) to.altitude = groundThere + height;
+      eye = eyeOf(to);
+      turn(eye, bearing, pitch);
+      clearTimeout(glideTimer);
+      glideTimer = window.setTimeout(() => anchor(true), 250);
+    },
+    { capture: true, passive: false },
+  );
 
   // Touch has no Shift key: with look mode on (the eye button), one finger turns the camera.
   canvas.addEventListener(
@@ -160,7 +263,7 @@ export function enableLookAround(map: maplibregl.Map): LookAround {
       flightToken++;
       release();
       const touch = event.touches[0];
-      drag = { x: touch.clientX, y: touch.clientY, bearing: map.getBearing(), pitch: map.getPitch() };
+      drag = { x: touch.clientX, y: touch.clientY, bearing: map.getBearing(), pitch: map.getPitch(), mode: 'look', middle: false };
       const move = (e: TouchEvent) => {
         if (!drag || !eye || !e.touches.length) return;
         e.preventDefault();
@@ -184,13 +287,14 @@ export function enableLookAround(map: maplibregl.Map): LookAround {
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'look-mode';
-  button.title = 'Look around: drag turns the camera in place (same as Shift+drag)';
+  button.title = 'Look around: drag turns the camera in place (same as Shift+drag or dragging with the middle button). Key: L';
   button.textContent = '👁';
-  button.addEventListener('click', () => {
+  const toggleLookMode = () => {
     lookMode = !lookMode;
     button.classList.toggle('on', lookMode);
     if (!lookMode) anchor(true);
-  });
+  };
+  button.addEventListener('click', toggleLookMode);
   const group = document.createElement('div');
   group.className = 'maplibregl-ctrl maplibregl-ctrl-group';
   group.append(button);
@@ -199,7 +303,10 @@ export function enableLookAround(map: maplibregl.Map): LookAround {
   // Any ordinary gesture needs the centre on the ground first (capture: before MapLibre handles it).
   const settle = (event: Event) => {
     const looking = lookMode && (event.type === 'touchstart' || (event instanceof MouseEvent && event.button === 0));
-    if (eye && !drag && !looking && !(event instanceof MouseEvent && event.shiftKey && event.button === 0)) anchor(true);
+    if (eye && !drag && !looking && !(event instanceof MouseEvent && event.shiftKey && event.button === 0)) {
+      clearTimeout(glideTimer);
+      anchor(true);
+    }
   };
   for (const type of ['wheel', 'mousedown', 'touchstart', 'dblclick']) canvas.addEventListener(type, settle, true);
   map.getContainer().addEventListener('keydown', settle, true);
@@ -209,6 +316,7 @@ export function enableLookAround(map: maplibregl.Map): LookAround {
   });
 
   return {
+    toggleLookMode,
     position() {
       const at = eye ?? locateEye();
       return { lngLat: at.position, altitude: at.altitude };

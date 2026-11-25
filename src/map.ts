@@ -213,3 +213,42 @@ export function writeHash(update: Record<string, string | null>): void {
   const text = [...params.entries()].map(([k, v]) => `${k}=${k === 'map' ? v : encodeURIComponent(v)}`).join('&');
   history.replaceState(history.state, '', `#${text}`);
 }
+
+/**
+ * Layer names inside the `water` vector source (lakes, rivers, peaks, place names). They are
+ * OpenFreeMap's; after `watchVectorSource` has switched to the other provider, VersaTiles'.
+ */
+export const vectorLayers = { water: 'water', waterway: 'waterway', peak: 'mountain_peak', place: 'place' };
+const FALLBACK_LAYERS: typeof vectorLayers = { water: 'water_polygons', waterway: 'water_lines', peak: 'mountain_peaks', place: 'place_labels' };
+const FALLBACK_TILES = 'https://tiles.versatiles.org/tiles/osm-vector/{z}/{x}/{y}';
+const FALLBACK_ATTRIBUTION = '<a href="https://versatiles.org" target="_blank">VersaTiles</a> © <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a>';
+
+/**
+ * Peak names, town names and lakes all come from one tile service. Some ad blockers stop it, and
+ * it can be down: then the same data is taken from a second service (peaks there only from zoom 10).
+ */
+export function watchVectorSource(map: maplibregl.Map, onSwitch: () => void = () => {}): void {
+  let tileErrors = 0;
+  let switched = false;
+  map.on('error', (event) => {
+    const error = event as unknown as { sourceId?: string; tile?: unknown };
+    if (switched || error.sourceId !== 'water') return;
+    // The service's description failing is decisive; single tiles may fail for other reasons.
+    if (error.tile && ++tileErrors < 3) return;
+    switched = true;
+    const layers = map.getStyle().layers;
+    const mine = (layer: maplibregl.LayerSpecification) => 'source' in layer && layer.source === 'water';
+    const moved = layers.filter(mine).map((layer) => ({ layer, before: layers.slice(layers.indexOf(layer) + 1).find((later) => !mine(later))?.id }));
+    for (const { layer } of moved) map.removeLayer(layer.id);
+    map.removeSource('water');
+    map.addSource('water', { type: 'vector', tiles: [FALLBACK_TILES], maxzoom: 14, attribution: FALLBACK_ATTRIBUTION });
+    const renamed = new Map(Object.entries(vectorLayers).map(([key, name]) => [name, FALLBACK_LAYERS[key as keyof typeof vectorLayers]]));
+    for (const { layer, before } of moved) {
+      const sourceLayer = (layer as { 'source-layer'?: string })['source-layer'];
+      map.addLayer({ ...layer, 'source-layer': renamed.get(sourceLayer ?? '') ?? sourceLayer } as maplibregl.LayerSpecification, before);
+    }
+    Object.assign(vectorLayers, FALLBACK_LAYERS);
+    console.warn('Place and peak names: first service unavailable, using the second');
+    onSwitch();
+  });
+}

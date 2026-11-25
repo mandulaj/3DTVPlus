@@ -3,7 +3,7 @@ import type * as maplibregl from 'maplibre-gl';
 import type { GeoJSONSource, RasterTileSource } from 'maplibre-gl';
 import * as SunCalc from 'suncalc';
 import { SLOT } from '../map';
-import { registerShadowProtocol, releaseShadowWorkers, shadowStats } from './shadowProtocol';
+import { onShadowRestart, registerShadowProtocol, releaseShadowWorkers, shadowStats } from './shadowProtocol';
 import { SunDisc } from './sunDisc';
 import { nightPolygon } from './terminator';
 
@@ -41,6 +41,7 @@ export class SunController {
   private lastSet = 0;
   private timer: number | undefined;
   private shownToken = -1;
+  private dropped = false;
   private disc: SunDisc;
   private applied = { azimuth: NaN, altitude: NaN };
 
@@ -73,8 +74,11 @@ export class SunController {
     }
     if (on) {
       this.applyCheap();
+      // Tiles dropped when sunlight was switched off mid-load are asked for again.
+      if (this.dropped) this.reloadShadows();
       this.requestShadows();
     } else {
+      this.dropped = true;
       this.applied = { azimuth: NaN, altitude: NaN };
       this.resetRelief();
       this.disc.hide();
@@ -110,6 +114,7 @@ export class SunController {
   private ensureLayers(): void {
     if (!this.registered) {
       registerShadowProtocol();
+      onShadowRestart(() => this.reloadShadows());
       this.registered = true;
     }
     if (!this.map.getSource(NIGHT_SOURCE)) {
@@ -192,6 +197,19 @@ export class SunController {
     map.setPaintProperty('hillshade', 'hillshade-illumination-direction', 315);
     map.setPaintProperty('hillshade', 'hillshade-highlight-color', '#ffffff');
     map.setSky({ 'sky-color': mix(SKY.day, SKY.day, 0), 'horizon-color': mix(HORIZON.day, HORIZON.day, 0), 'fog-color': mix(HORIZON.day, HORIZON.day, 0) });
+  }
+
+  /** Asks for the current shadow tiles afresh (after the workers were replaced). */
+  private reloadShadows(): void {
+    this.dropped = false;
+    if (!this.enabled) {
+      this.dropped = true;
+      return;
+    }
+    this.shownToken = this.token();
+    this.lastSet = performance.now();
+    this.busy = true;
+    (this.map.getSource(SHADOW_SOURCE) as RasterTileSource | undefined)?.setTiles([this.tileUrl()]);
   }
 
   /** Throttled: a new set of shadow tiles is requested only once the previous set has arrived. */

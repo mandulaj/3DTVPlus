@@ -7,7 +7,7 @@ import { PRESETS, type Preset } from '../layers/presets';
 import { SNOW_PRODUCTS, STATION_TYPES, type Legend, type SlfLayers, type SnowProduct, type StationType } from '../layers/slf';
 import { WATER_LAYERS } from '../map';
 import { unofficial } from '../unofficial';
-import { h, slider } from './dom';
+import { h, info, slider } from './dom';
 
 export interface SlfState {
   snow: SnowProduct | '';
@@ -25,6 +25,8 @@ export interface TerrainState {
   exaggeration: number;
   hillshade: number;
   colorRelief: boolean;
+  /** How strongly the elevation colours cover what is underneath (0–1). */
+  colorReliefOpacity: number;
   /** Draw lakes and rivers in blue where no base map shows them. */
   water: boolean;
   /** Summit markers with name, altitude and distance. */
@@ -76,6 +78,9 @@ export class Panel {
   private reliefScale = 1;
   /** Set by the app: switches the peak labels. */
   onPeaks: (on: boolean) => void = () => {};
+  /** Set by the app: switches the weather forecast on the map. */
+  onWeather: (on: boolean) => void = () => {};
+  weatherBox = h('input', { type: 'checkbox', onchange: () => this.onWeather(this.weatherBox.checked) });
   /** Set by the app: opens or closes the route planner. */
   onPlan: () => void = () => {};
 
@@ -109,6 +114,7 @@ export class Panel {
       this.buildPresets(),
       this.buildBase(),
       this.slfBox,
+      this.buildWeather(),
       this.buildSac(),
       this.buildOverlays(),
       this.buildTerrain(),
@@ -120,6 +126,16 @@ export class Panel {
     if (window.matchMedia('(max-width: 700px)').matches) this.root.classList.add('collapsed');
   }
 
+  // ── Weather ──
+
+  private buildWeather(): HTMLElement {
+    return section(
+      'Weather forecast',
+      false,
+      h('label', { class: 'row' }, this.weatherBox, h('span', {}, 'Towns and summits in view'), info('Lowest and highest temperature, weather and strongest wind (km/h, arrow shows where it blows to) for the day chosen at the top of the map. Model forecast from Open-Meteo; in and around Switzerland from the MeteoSwiss ICON model. Summit values are for summit height.')),
+    );
+  }
+
   // ── SAC routes ──
 
   private sacBody = h('div', { class: 'section-body sac-body' });
@@ -129,6 +145,7 @@ export class Panel {
     this.sac.onHint = (hint) => (this.sacHint.textContent = hint ?? '');
     this.renderSac();
     const wrapper = section('Routes (SAC route portal)', false);
+    wrapper.querySelector('summary')?.append(info('Route lines from the SAC route portal. Click a route for difficulty and a link to its SAC page. Switzerland and nearby, from zoom 10.'));
     wrapper.querySelector('.section-body')?.replaceWith(this.sacBody);
     return wrapper;
   }
@@ -157,7 +174,7 @@ export class Panel {
       this.sacBoxes.set(id, box);
       return h('label', { class: 'row' }, box, swatch, h('span', {}, discipline.name));
     });
-    this.sacBody.replaceChildren(...rows, this.sacHint, h('div', { class: 'muted' }, 'Click a route for difficulty and a link to its SAC page. Switzerland and nearby, from zoom 10.'));
+    this.sacBody.replaceChildren(...rows, this.sacHint);
   }
 
   private showSettings(): void {
@@ -230,7 +247,9 @@ export class Panel {
 
   /** Rebuild the SLF controls from the current state. */
   syncSlf(): void {
-    this.slfBox.replaceChildren(this.buildSlf());
+    const slfSection = this.buildSlf();
+    slfSection.querySelector('summary')?.append(info('Click a region, station or avalanche on the map for details.'));
+    this.slfBox.replaceChildren(slfSection);
   }
 
   /** Sunlight mode tones the generic relief shading down so it does not compete with real shadows. */
@@ -269,7 +288,7 @@ export class Panel {
       const control = paramControl(def, this.layers.baseParam, (value) => void this.layers.setBase(def.id, value));
       if (control) this.baseParamBox.append(h('label', {}, 'Date '), control);
     }
-    if (def?.note) this.baseParamBox.append(h('div', { class: 'muted' }, def.note));
+    if (def?.note) this.baseParamBox.append(info(def.note));
   }
 
   // ── Overlays ──
@@ -422,7 +441,6 @@ export class Panel {
       h('div', { class: 'row-extra' }, bulletinOpacity),
       stations,
       h('label', { class: 'row' }, avalanches, h('span', {}, 'Recent avalanches')),
-      h('div', { class: 'muted' }, 'Click a region, station or avalanche for details.'),
     );
   }
 
@@ -450,6 +468,7 @@ export class Panel {
     this.map.setPaintProperty('hillshade', 'hillshade-exaggeration', t.hillshade * this.reliefScale);
     this.map.setLayoutProperty('hillshade', 'visibility', t.hillshade > 0 ? 'visible' : 'none');
     this.map.setLayoutProperty('color-relief', 'visibility', t.colorRelief ? 'visible' : 'none');
+    this.map.setPaintProperty('color-relief', 'color-relief-opacity', t.colorReliefOpacity);
     this.applyWater();
   }
 
@@ -474,6 +493,15 @@ export class Panel {
         this.onStateChange();
       }),
       h('label', { class: 'row' }, this.colorReliefBox, h('span', {}, 'Elevation colours')),
+      h(
+        'div',
+        { class: 'row-extra' },
+        slider(t.colorReliefOpacity, 0.1, 1, 0.05, (v) => {
+          t.colorReliefOpacity = v;
+          this.map.setPaintProperty('color-relief', 'color-relief-opacity', v);
+          this.onStateChange();
+        }, 'Strength of the elevation colours'),
+      ),
       h(
         'label',
         { class: 'row', title: 'Shown without a base map or with elevation colours' },
@@ -529,19 +557,27 @@ export class Panel {
           if (selected?.needsKey === provider) void this.layers.setBase(selected.id).then(() => this.syncBase());
         },
       });
-      return [h('label', { class: 'row' }, h('span', {}, `${KEY_PROVIDERS[provider].name} API key`)), field];
+      return [h('label', { class: 'row' }, h('span', {}, `${KEY_PROVIDERS[provider].name} API key`), info(`${KEY_PROVIDERS[provider].help}. Keys are stored in this browser only; they are not part of shared links.`)), field];
     });
     const unofficialBox = h('input', { type: 'checkbox', checked: unofficial.enabled, onchange: () => this.setUnofficial(unofficialBox.checked) });
     return (this.settingsSection = section(
       'Settings',
       false,
-      h('label', { class: 'row' }, unofficialBox, h('span', {}, 'Show unofficial third-party data')),
-      h('div', { class: 'muted' }, 'SAC route portal lines and Skitourenguru risk ratings. This is their content, fetched live from their servers; no licence has been granted for showing it here. Off unless you switch it on in this browser.'),
+      h('label', { class: 'row' }, unofficialBox, h('span', {}, 'Show unofficial third-party data'), info('SAC route portal lines and Skitourenguru risk ratings. This is their content, fetched live from their servers; no licence has been granted for showing it here. Off unless you switch it on in this browser.')),
+      h(
+        'div',
+        { class: 'row' },
+        h('span', {}, 'Mouse and keyboard controls'),
+        info(
+          'Drag: move. Wheel: zoom. Right-drag or Ctrl+drag: turn and tilt around the screen centre. ' +
+            'Middle-drag or Shift+drag: look around from where the camera is. Ctrl+middle-drag: swing around the point under the cursor. ' +
+            'Double middle-click: north up. Shift+wheel: move forward and back. Alt+wheel: time of day (sunlight on). ' +
+            'Keys: W A S D move, Q E turn, R F tilt, Shift faster, N north up, L look mode, Ctrl+F search.',
+        ),
+      ),
       ...keys,
-      h('div', { class: 'muted' }, 'Keys are stored in this browser only; they are not part of the shared URL.'),
-      h('label', { class: 'row' }, h('span', {}, 'CORS proxy prefix')),
+      h('label', { class: 'row' }, h('span', {}, 'CORS proxy prefix'), info('Only for layers marked "proxy" (SLF terrain maps). The tile URL is appended to this prefix. Not needed under "npm run dev".')),
       input,
-      h('div', { class: 'muted' }, 'Only for layers marked "proxy" (SLF terrain maps). The tile URL is appended to this prefix. Not needed under "npm run dev".'),
     ));
   }
 

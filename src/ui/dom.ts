@@ -35,3 +35,15 @@ export function toast(message: string, kind: 'error' | 'info' = 'error'): void {
   clearTimeout(toastTimer);
   toastTimer = window.setTimeout(() => el.classList.remove('show'), 5000);
 }
+
+/** A small (i) that shows an explanation on hover, focus or tap, instead of text taking up room. */
+export function info(text: string): HTMLElement {
+  const el = h('span', { class: 'info', tabindex: '0', role: 'note', 'aria-label': text, 'data-tip': text }, 'ⓘ');
+  // Inside a label or a section heading a click must not also tick the box or fold the section.
+  el.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    el.focus();
+  });
+  return el;
+}

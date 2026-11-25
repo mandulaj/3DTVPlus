@@ -16,6 +16,7 @@ export default defineConfig({
   plugins: [viteSingleFile()],
   server: { proxy },
   preview: { proxy },
-  worker: { format: 'es' },
+  // Classic (not module) workers: a module worker cannot start when the page is opened as a file.
+  worker: { format: 'iife' },
   build: { target: 'es2022', chunkSizeWarningLimit: 4000 },
 });

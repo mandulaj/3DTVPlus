@@ -33,6 +33,13 @@ It only pulls tiles and data from the public services listed below.
   On the globe the night side is shaded.
 - **Look around**: Shift+drag or middle-button drag turns the camera in place (up to just below the horizon),
   e.g. to look up a mountain from the valley floor. Normal tilt (Ctrl+drag / right-drag) stops at 78°.
+- **Camptocamp routes**: ski touring routes from [camptocamp.org](https://www.camptocamp.org) for Switzerland
+  (Routes section, also part of the "Ski touring CH" preset). Lines where a track was uploaded, dots otherwise;
+  click for grade, height gain, measured line and a link. The route planner follows the lines. Camptocamp's API
+  does not answer other websites, so the routes are a copy stored with the site in `public/data/camptocamp/`
+  (half-degree cells, loaded for the area in view). Refresh or widen it with
+  `node scripts/fetch-camptocamp.mjs [west south east north] [activity]`. Needs a web server: the files are not
+  reachable when `index.html` is opened directly from disk.
 - **More controls**: Ctrl+middle-drag swings the camera around the point under the cursor; double middle-click
   puts north up; Shift+wheel moves forward and back keeping height above ground; Alt+wheel changes the time of
   day while sunlight is on (Alt+Shift: single minutes). Keys: W A S D move, Q E turn, R F tilt (Shift: faster),
@@ -124,3 +131,9 @@ runs them first. No CI workflow is included: add one under `.github/workflows` i
 
 Snow and avalanche layers are for orientation only. For decisions in avalanche terrain use the official
 bulletin at [slf.ch](https://www.slf.ch) / [whiterisk.ch](https://whiterisk.ch).
+
+## Data licences
+
+The code does not cover the data in `public/data/camptocamp/`: those routes are © Camptocamp contributors,
+[CC BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0/) (a few CC BY-NC-ND), copied unchanged apart from
+coordinate rounding. Each route keeps its licence and a link to its authors (`credit`).

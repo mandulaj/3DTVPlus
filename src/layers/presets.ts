@@ -9,6 +9,8 @@ export interface Preset {
   overlays: { id: string; opacity?: number }[];
   /** SAC route portal disciplines to draw. */
   sac?: SacDiscipline[];
+  /** Camptocamp routes (ski touring). */
+  c2c?: boolean;
   slf?: { snow?: SnowProduct; snowOpacity?: number; bulletin?: boolean; bulletinOpacity?: number; stations?: StationType; avalanches?: boolean };
 }
 
@@ -19,6 +21,7 @@ export const PRESETS: Preset[] = [
     base: 'ch-map-winter',
     overlays: [{ id: 'ch-slope30', opacity: 0.25 }, { id: 'ch-wildlife' }, { id: 'ch-skitouren' }],
     sac: ['ski_tour'],
+    c2c: true,
     slf: { snow: 'hs', snowOpacity: 0.5, bulletin: true, bulletinOpacity: 0.15 },
   },
   {

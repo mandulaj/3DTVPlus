@@ -86,12 +86,17 @@ export function climb(heights: number[]): { up: number; down: number } {
  * Totals for a route given as line pieces. Each joined path is read from its lower end to its
  * higher end (the way up to a summit or hut), since the pieces themselves carry no direction.
  */
-export async function trackStats(lines: Point[][], heightsOf: (points: Point[]) => Promise<number[]> = elevations): Promise<TrackStats | null> {
+export async function trackStats(
+  lines: Point[][],
+  heightsOf: (points: Point[]) => Promise<number[]> = elevations,
+  /** Recorded tracks have a direction of travel: keep the pieces as they are. */
+  asRecorded = false,
+): Promise<TrackStats | null> {
   const stats: TrackStats = { length: 0, up: 0, down: 0, lowest: Infinity, highest: -Infinity };
-  for (const path of joinLines(lines)) {
+  for (const path of asRecorded ? lines.filter((line) => line.length > 1) : joinLines(lines)) {
     for (let i = 1; i < path.length; i++) stats.length += metres(path[i - 1], path[i]);
     const heights = await heightsOf(resample(path));
-    if (heights[0] > heights[heights.length - 1]) heights.reverse();
+    if (!asRecorded && heights[0] > heights[heights.length - 1]) heights.reverse();
     const { up, down } = climb(heights);
     stats.up += up;
     stats.down += down;

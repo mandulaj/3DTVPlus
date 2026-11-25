@@ -21,6 +21,7 @@ import { h, toast } from './ui/dom';
 import { unofficial } from './unofficial';
 import { enableRouteInfo } from './layers/routes';
 import { Skitourenguru } from './layers/skitourenguru';
+import { Camptocamp } from './layers/camptocamp';
 import { SAC_DISCIPLINES, SacRoutes, type SacDiscipline } from './layers/sac';
 
 // A shared link carries everything in one compressed parameter: unfold it into the ordinary
@@ -51,6 +52,16 @@ guru.onError = toast;
 enableRouteInfo(map, layers, slf.popup);
 const sac = new SacRoutes(map, slf.popup);
 sac.onError = toast;
+const c2c = new Camptocamp(map, slf.popup);
+c2c.onError = toast;
+// The planner follows SAC and Camptocamp lines alike; the joined list is rebuilt only when either changes.
+let routeLines: { sac: unknown; c2c: unknown; all: [number, number][][] } | null = null;
+function routableLines(): [number, number][][] {
+  const a = sac.routable();
+  const b = c2c.routable();
+  if (routeLines?.sac !== a || routeLines.c2c !== b) routeLines = { sac: a, c2c: b, all: b.length ? [...a, ...b] : a };
+  return routeLines.all;
+}
 const sun = new SunController(map);
 sun.turnTo = look.turnTo;
 layers.onError = toast;
@@ -99,6 +110,7 @@ function saveState(): void {
     ov: layers.serializeOverlays() || null,
     slf: slfParts.join(',') || null,
     sac: [...sac.enabled].join(',') || null,
+    c2c: c2c.enabled ? '1' : null,
     terrain:
       terrain.exaggeration !== 1 || terrain.hillshade !== 0.35 || terrain.colorRelief || !terrain.water || terrain.peaks || terrain.colorReliefOpacity !== 0.5
         ? `${terrain.exaggeration}~${terrain.hillshade}~${terrain.colorRelief ? 1 : 0}~${terrain.water ? 1 : 0}~${terrain.peaks ? 1 : 0}~${terrain.colorReliefOpacity}`
@@ -133,7 +145,7 @@ map.once('load', async () => {
   panel.onPeaks = (on) => peaks.setEnabled(on);
   if (terrain.peaks) peaks.setEnabled(true);
   const tracks = enableTrackDrop(map, document.getElementById('panel')!);
-  const planner = new Planner(map, { network: () => sac.routable(), snow: () => slf.snowSampler(),
+  const planner = new Planner(map, { network: routableLines, snow: () => slf.snowSampler(),
     danger: () => slf.dangerSampler(),
     requestSnow: () => {
       if (!slfState.snow) slfState.snow = 'hs';
@@ -178,6 +190,15 @@ map.once('load', async () => {
   if (slfState.guru) void guru.setEnabled(true);
   if (unofficial.enabled) sac.setDisciplines((hash.get('sac') ?? '').split(',').filter((d): d is SacDiscipline => d in SAC_DISCIPLINES));
   panel.syncSac();
+  c2c.onHint = (hint) => (panel.camptocampHint.textContent = hint ?? '');
+  panel.onCamptocamp = (on) => {
+    void c2c.setEnabled(on);
+    saveState();
+  };
+  if (hash.get('c2c')) {
+    panel.camptocampBox.checked = true;
+    void c2c.setEnabled(true);
+  }
   if (hash.get('sun')) sunControls.setEnabled(true);
 
   const mapyLogo = h('a', { class: 'mapy-logo', href: 'https://mapy.com/', target: '_blank', rel: 'noopener', title: 'Map by Mapy.com' }, h('img', { src: 'https://api.mapy.com/img/api/logo.svg', alt: 'Mapy.com' }));
@@ -253,4 +274,4 @@ async function openSharedTrack(planner: Planner): Promise<void> {
 }
 
 // Handy for debugging from the console.
-Object.assign(window, { map, layers, slf, sun, guru, sac, look });
+Object.assign(window, { map, layers, slf, sun, guru, sac, c2c, look });

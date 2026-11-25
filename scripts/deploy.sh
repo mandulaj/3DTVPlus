@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Builds the single-file app and publishes it to the gh-pages branch (GitHub Pages).
+# Builds the app (one page plus its data files) and publishes it to the gh-pages branch (GitHub Pages).
 # Usage: npm run deploy
 set -eu
 cd "$(dirname "$0")/.."
@@ -9,7 +9,7 @@ npm test
 npm run build
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-cp dist/index.html "$tmp/"
+cp -R dist/. "$tmp/" # the page and the data files stored next to it
 touch "$tmp/.nojekyll"
 cd "$tmp"
 git init -q -b gh-pages

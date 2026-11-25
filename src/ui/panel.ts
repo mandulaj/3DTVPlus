@@ -139,14 +139,34 @@ export class Panel {
   // ── SAC routes ──
 
   private sacBody = h('div', { class: 'section-body sac-body' });
+  onCamptocamp: (on: boolean) => void = () => {};
+  camptocampHint = h('div', { class: 'muted' });
+  camptocampBox = h('input', { type: 'checkbox', onchange: () => this.onCamptocamp(this.camptocampBox.checked) });
   private settingsSection: HTMLElement | null = null;
 
   private buildSac(): HTMLElement {
     this.sac.onHint = (hint) => (this.sacHint.textContent = hint ?? '');
     this.renderSac();
-    const wrapper = section('Routes (SAC route portal)', false);
+    const wrapper = section('Routes (SAC, Camptocamp)', false);
     wrapper.querySelector('summary')?.append(info('Route lines from the SAC route portal. Click a route for difficulty and a link to its SAC page. Switzerland and nearby, from zoom 10.'));
     wrapper.querySelector('.section-body')?.replaceWith(this.sacBody);
+    const swatch = h('i', { class: 'swatch' });
+    swatch.style.background = '#e8590c';
+    wrapper.append(
+      h(
+        'div',
+        { class: 'section-body' },
+        h(
+          'label',
+          { class: 'row' },
+          this.camptocampBox,
+          swatch,
+          h('span', {}, 'Camptocamp ski tours'),
+          info('Ski touring routes from camptocamp.org (CC BY-SA), as a copy stored with this site: Switzerland, not updated live. Dots are routes without a drawn line. Click for details and a link. The route planner follows the lines.'),
+        ),
+        this.camptocampHint,
+      ),
+    );
     return wrapper;
   }
 
@@ -236,6 +256,8 @@ export class Panel {
     s.guru = false;
     void this.guru.setEnabled(false);
     this.sac.setDisciplines(unofficial.enabled ? (preset.sac ?? []) : []);
+    this.camptocampBox.checked = Boolean(preset.c2c);
+    this.onCamptocamp(this.camptocampBox.checked);
     this.syncSac();
     void this.slf.setSnowMap(s.snow || null, undefined, s.snowOpacity);
     void this.slf.setBulletin(s.bulletin, s.bulletinOpacity);

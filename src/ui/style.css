@@ -1348,3 +1348,14 @@ body.weather-on .search {
 .check-summary { margin-top: 4px; font-size: 12px; }
 .check-legend { display: flex; flex-wrap: wrap; gap: 2px 10px; font-size: 11px; margin-top: 4px; }
 .check-legend span { display: inline-flex; align-items: center; gap: 4px; }
+
+/* Menu sections by topic: symbol before the title, count of switched-on things after it. */
+.section-icon { display: inline-block; width: 1.7em; text-align: center; margin-right: 4px; }
+.section > summary[data-on]::after { content: attr(data-on); margin-left: 8px; padding: 0 6px; border-radius: 9px; background: #1f6feb; color: #fff; font-size: 11px; font-weight: 600; }
+.section .section { margin: 6px 0 0; border-top: 1px solid var(--line); }
+.sac-note { font-size: 12px; margin: 4px 0; }
+/* Hut markers. */
+.hut { border: 1.5px solid #fff; background: #8a4b12; color: #fff; border-radius: 5px; width: 22px; height: 22px; padding: 0; font-size: 14px; line-height: 1; cursor: pointer; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4); }
+.hut.shelter { background: #6b7280; }
+.hut.lodging { background: #2f6f3e; }
+.hut:hover { filter: brightness(1.25); }

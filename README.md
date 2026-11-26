@@ -40,6 +40,17 @@ It only pulls tiles and data from the public services listed below.
   (half-degree cells, loaded for the area in view). Refresh or widen it with
   `node scripts/fetch-camptocamp.mjs [west south east north] [activity]`. Needs a web server: the files are not
   reachable when `index.html` is opened directly from disk.
+- **Ski route networks**: selectable ski touring lines for Switzerland (swisstopo/SAC), Austria, Bavaria and
+  South Tyrol (ÖAV, DAV, AVS) and the French Alps and Pyrenees (Petzl Foundation), all from Skitourenguru's open
+  route network, plus swisstopo/SAC snowshoe routes. Stored with the site in quarter-degree cells
+  (`public/data/routes/`), loaded for the area in view; click for grade, measured length and ascent; the planner
+  follows them. Refresh with `node scripts/fetch-skitourenguru.mjs [ch] [at] [fr]` and
+  `node scripts/fetch-snowshoe.mjs`.
+- **Huts**: staffed huts, shelters and lodgings from refuges.info, asked live for the area in view (mainly the
+  French and western Alps).
+- **Menu by topic**: Ski touring & snowshoe, Snow & avalanches, Hiking & mountaineering, Cycling, Weather &
+  webcams, Terrain, More maps. Each section shows how many things are switched on in it; a preset switches on
+  everything that belongs to its activity and opens its section.
 - **Route filters**: "Filter" beside each kind of SAC route and beside Camptocamp limits the routes on the map
   to a range of grades (T1–T6, L–EX, WT1–WT6, K1–K6; Camptocamp F–ED) and of ascent. SAC grades are looked up
   at the SAC portal and SAC ascent is measured along the line, both only while such a filter is set.
@@ -149,6 +160,21 @@ bulletin at [slf.ch](https://www.slf.ch) / [whiterisk.ch](https://whiterisk.ch).
 
 ## Data licences
 
-The code does not cover the data in `public/data/camptocamp/`: those routes are © Camptocamp contributors,
-[CC BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0/) (a few CC BY-NC-ND), copied unchanged apart from
-coordinate rounding. Each route keeps its licence and a link to its authors (`credit`).
+The code does not cover the data under `public/data/`. Each collection is a copy of someone else's work, kept
+unchanged apart from conversion to longitude/latitude (rounded to about 1 m) and sorting into cells:
+
+- `camptocamp/`: © Camptocamp contributors, [CC BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0/) (a
+  few CC BY-NC-ND). Each route keeps its licence and a link to its authors (`credit`).
+- `routes/stg-ch/`: ski routes © swisstopo / SAC, swisstopo open data licence (source to be named), taken from
+  the [Skitourenguru route network](https://github.com/skitourenguru/Routes).
+- `routes/stg-at/`: © ÖAV, DAV, AVS – Ski Touring Routes for Austria, Germany and South Tyrol,
+  [CC BY-ND 4.0](https://creativecommons.org/licenses/by-nd/4.0/), from the same repository.
+- `routes/stg-fr/`: ski routes created and maintained by the Petzl Foundation in cooperation with Skitourenguru
+  GmbH, CC BY-ND 4.0 (their smoothed lines from download.skitourenguru.com). The Italian part of that network
+  is under a private licence and is not included.
+- `routes/ch-snowshoe/`: snowshoe routes © swisstopo / SAC, swisstopo open data.
+- `webcams.json`: © OpenStreetMap contributors, ODbL.
+
+The Skitourenguru repository also says its data may be used for private, non-commercial purposes only. This
+viewer is a private, non-commercial project; whoever reuses it otherwise must check those terms, and whether
+converting coordinates counts as a change under "no derivatives".

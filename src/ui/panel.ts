@@ -8,6 +8,7 @@ import { SNOW_PRODUCTS, STATION_TYPES, type Legend, type SlfLayers, type SnowPro
 import { WATER_LAYERS } from '../map';
 import { unofficial } from '../unofficial';
 import type { RouteFilter } from '../layers/routeFilter';
+import type { RouteSpec } from '../layers/storedRoutes';
 import { routeFilterUi, type RouteFilterUi } from './routeFilterUi';
 import { h, info, slider } from './dom';
 
@@ -46,8 +47,39 @@ function groupBy<T>(items: T[], key: (item: T) => string): Map<string, T[]> {
 }
 
 function section(title: string, open: boolean, ...children: (Node | null)[]): HTMLDetailsElement {
-  return h('details', { open, class: 'section' }, h('summary', {}, title), h('div', { class: 'section-body' }, ...children));
+  // A leading symbol ("⛷ Ski touring") is set apart so all titles line up.
+  const match = /^(\S+) (.+)$/u.exec(title);
+  const symbol = match && !/^[\w(]/.test(match[1]) ? match[1] : null;
+  const summary = symbol ? h('summary', {}, h('span', { class: 'section-icon', 'aria-hidden': 'true' }, symbol), match![2]) : h('summary', {}, title);
+  return h('details', { open, class: 'section' }, summary, h('div', { class: 'section-body' }, ...children));
 }
+
+/** Menu sections by topic, and the map overlays (catalog ids) listed in each. */
+const TOPIC_OVERLAYS: Record<string, string[]> = {
+  ski: ['ch-skitouren', 'ch-snowshoe', 'ch-winter-huts', 'ch-winter-lifts', 'ch-wildlife', 'osm-pistes', 'wmt-slopes'],
+  snow: ['ch-slope30', 'ch-slope-classes', 'slf-cat', 'slf-ath', 'slf-slope', 'fr-slopes', 'ch-protect-forest', 'gibs-snow'],
+  hiking: ['ch-hiking', 'ch-wanderland', 'wmt-hiking', 'ch-huntingban'],
+  cycling: ['ch-veloland', 'ch-mtbland', 'wmt-cycling', 'wmt-mtb'],
+  weather: ['rainviewer'],
+};
+const SAC_NOTE = 'Lines from the SAC route portal, asked live from SAC (Switzerland and nearby, from zoom 10). The most complete and current set, with a link to each route\'s SAC page. Unofficial use: SAC has granted no licence for showing its data here, which is why it must be switched on under Settings.';
+/** What each kind of SAC route is, and how it relates to the other sources of the same routes. */
+const SAC_NOTES: Partial<Record<SacDiscipline, string>> = {
+  ski_tour: `${SAC_NOTE} The same routes are largely also in "Ski routes Switzerland" (open data, a checked subset) and drawn on the "swisstopo ski routes" map layer: one of the three is usually enough.`,
+  snowshoe_tour: `${SAC_NOTE} The same routes are also in "Snowshoe routes Switzerland" (open data) and on the "swisstopo snowshoe routes" map layer.`,
+};
+/** Clearer names in the menu where the catalog name alone would be mistaken for a line source. */
+const OVERLAY_NAMES: Record<string, string> = { 'ch-skitouren': 'swisstopo ski routes (map picture)', 'ch-snowshoe': 'swisstopo snowshoe routes (map picture)' };
+/** Notes for map overlays that show the same thing as a line source. */
+const OVERLAY_NOTES: Record<string, string> = {
+  'ch-skitouren': 'swisstopo\'s official ski route map, drawn as a picture: complete and with the route numbers, but the lines cannot be filtered or followed by the planner. Click a route for its details. Same routes as "SAC ski touring" and "Ski routes Switzerland".',
+  'ch-snowshoe': 'swisstopo\'s official snowshoe route map, drawn as a picture. Same routes as the "Snowshoe routes Switzerland" lines, which can be filtered and followed by the planner.',
+};
+/** SAC route kinds per section. */
+const TOPIC_SAC: Record<string, SacDiscipline[]> = {
+  ski: ['ski_tour', 'snowshoe_tour'],
+  hiking: ['mountain_hiking', 'alpine_tour', 'via_ferrata', 'climbing'],
+};
 
 function paramControl(def: LayerDef, value: string | undefined, onchange: (value: string) => void): HTMLElement | null {
   if (!def.param) return null;
@@ -71,12 +103,13 @@ const GURU_PARENT = 'ch-skitouren';
 export class Panel {
   private legends = new Map<string, Legend>();
   private legendBox = h('div', { class: 'legends' });
-  private overlayRows = new Map<string, { extra: HTMLElement; checkbox: HTMLInputElement }>();
+  private overlayRows = new Map<string, { extra: HTMLElement; checkbox: HTMLInputElement }[]>();
+  private sections = new Map<string, HTMLDetailsElement>();
   private baseParamBox = h('div', { class: 'row-extra' });
   private baseSelect!: HTMLSelectElement;
   private slfBox = h('div');
   private sacBoxes = new Map<SacDiscipline, HTMLInputElement>();
-  private sacHint = h('div', { class: 'muted' });
+  private sacParts: { body: HTMLElement; hint: HTMLElement; ids: SacDiscipline[] }[] = [];
   private reliefScale = 1;
   /** Set by the app: switches the peak labels. */
   onPeaks: (on: boolean) => void = () => {};
@@ -89,9 +122,19 @@ export class Panel {
   webcamHint = h('div', { class: 'muted' });
   weatherBox = h('input', { type: 'checkbox', onchange: () => this.onWeather(this.weatherBox.checked) });
   /** Set by the app: opens or closes the route planner. */
-  /** Adds a tool's own section to the panel, above Settings. */
-  addSection(section: HTMLElement): void {
-    this.settingsSection?.before(section);
+  /** Adds a tool's own block to a section of the panel (by topic; unknown topics go above Settings). */
+  addTo(topic: string, block: HTMLElement): void {
+    const body = this.sections.get(topic)?.querySelector(':scope > .section-body');
+    if (body) body.append(block);
+    else this.settingsSection?.before(block);
+  }
+
+  /** Opens a section and brings it into view. */
+  openSection(topic: string): void {
+    const target = this.sections.get(topic);
+    if (!target) return;
+    target.open = true;
+    target.scrollIntoView({ block: 'nearest' });
   }
 
   onPlan: () => void = () => {};
@@ -104,6 +147,8 @@ export class Panel {
     private slf: SlfLayers,
     private guru: Skitourenguru,
     private sac: SacRoutes,
+    /** Stored route collections, each with a switch and a filter in the menu. */
+    private routes: RouteSpec[],
     readonly slfState: SlfState,
     readonly terrain: TerrainState,
     private onStateChange: () => void,
@@ -126,15 +171,23 @@ export class Panel {
       h('h1', {}, '3D Terrain Viewer'),
       this.buildPresets(),
       this.buildBase(),
-      this.slfBox,
+      this.buildSki(),
+      this.buildSnow(),
+      this.buildHiking(),
+      this.buildCycling(),
       this.buildWeather(),
-      this.buildSac(),
-      this.buildOverlays(),
       this.buildTerrain(),
+      this.buildMore(),
       this.buildSettings(),
     );
+    this.sac.onHint = (hint) => this.sacParts.forEach((part) => (part.hint.textContent = hint ?? ''));
+    this.renderSac();
     this.syncSlf();
     this.root.append(toggle, body, this.legendBox);
+    // Each section's header shows how many things are switched on inside it.
+    body.addEventListener('change', () => window.setTimeout(() => this.countActive(), 0));
+    body.addEventListener('click', () => window.setTimeout(() => this.countActive(), 0));
+    this.countActive();
     // On a phone the map comes first: the layer panel opens on demand.
     if (window.matchMedia('(max-width: 700px)').matches) this.root.classList.add('collapsed');
   }
@@ -142,97 +195,194 @@ export class Panel {
   // ── Weather ──
 
   private buildWeather(): HTMLElement {
-    return section(
-      'Weather & webcams',
+    return this.topic(
+      'weather',
+      '🌤 Weather & webcams',
       false,
       h('label', { class: 'row' }, this.weatherBox, h('span', {}, 'Towns and summits in view'), info('Lowest and highest temperature, weather and strongest wind (km/h, arrow shows where it blows to) for the day chosen at the top of the map. Model forecast from Open-Meteo; in and around Switzerland from the MeteoSwiss ICON model. Summit values are for summit height.')),
       h('label', { class: 'row' }, this.webcamBox, h('span', {}, 'Webcams'), info('Camera icons where a webcam is known; click one for a link to it. Without setup they come from OpenStreetMap (a stored copy for Switzerland and around; link only). With your own free Windy Webcams API key (Settings) they come from Windy, with a preview picture.')),
       this.webcamHint,
+      ...this.overlayRowsFor('weather'),
     );
+  }
+
+  // ── Topic sections ──
+
+  private topic(id: string, title: string, open: boolean, ...children: (Node | null)[]): HTMLDetailsElement {
+    const made = section(title, open, ...children);
+    this.sections.set(id, made);
+    return made;
+  }
+
+  private overlayRowsFor(topic: string): HTMLElement[] {
+    return TOPIC_OVERLAYS[topic].map((id) => byId.get(id)).filter((def): def is LayerDef => !!def).map((def) => this.overlayRow(def));
+  }
+
+  /** How many switches are on in each section, shown beside its title. */
+  countActive(): void {
+    for (const made of this.sections.values()) {
+      const on = [...made.querySelectorAll('input[type="checkbox"]:checked')].filter((box) => !box.closest('.check-manual')).length + made.querySelectorAll('.segmented button.on:not([data-key=""])').length + [...made.querySelectorAll('select.counted')].filter((select) => (select as HTMLSelectElement).value !== '').length;
+      const summary = made.querySelector(':scope > summary')!;
+      if (on) summary.setAttribute('data-on', String(on));
+      else summary.removeAttribute('data-on');
+    }
+  }
+
+  private buildSki(): HTMLElement {
+    return this.topic(
+      'ski',
+      '⛷ Ski touring & snowshoe',
+      false,
+      h('div', { class: 'group-title' }, 'Routes'),
+      this.sacPart('ski'),
+      ...this.routes.flatMap((spec) => this.routeRow(spec)),
+      h('div', { class: 'group-title' }, 'Map layers'),
+      ...this.overlayRowsFor('ski'),
+      ...this.hutRow(),
+    );
+  }
+
+  private buildSnow(): HTMLElement {
+    const made = this.topic('snow', '❄ Snow & avalanches', true, this.slfBox, h('div', { class: 'group-title' }, 'Avalanche terrain'), ...this.overlayRowsFor('snow'));
+    made.querySelector('summary')?.append(info('SLF data covers Switzerland. Click a region, station or avalanche on the map for details.'));
+    return made;
+  }
+
+  private buildHiking(): HTMLElement {
+    return this.topic('hiking', '🥾 Hiking & mountaineering', false, ...this.overlayRowsFor('hiking'), this.sacPart('hiking'), ...this.hutRow());
+  }
+
+  private buildCycling(): HTMLElement {
+    return this.topic('cycling', '🚲 Cycling', false, ...this.overlayRowsFor('cycling'));
+  }
+
+  /** Every map overlay not listed under a topic. */
+  private buildMore(): HTMLElement {
+    const listed = new Set(Object.values(TOPIC_OVERLAYS).flat());
+    const container = h('div', {});
+    for (const [group, defs] of groupBy(CATALOG.filter((l) => l.role === 'overlay' && !listed.has(l.id)), (l) => l.group)) {
+      container.append(h('div', { class: 'group-title' }, group));
+      for (const def of defs) container.append(this.overlayRow(def));
+    }
+    return this.topic('more', '🧭 More maps', false, container);
+  }
+
+  // ── Stored routes (Camptocamp, Skitourenguru's network, …) ──
+
+  onRoute: (id: string, on: boolean) => void = () => {};
+  onRouteFilter: (id: string, filter: RouteFilter | null) => void = () => {};
+  private routeBoxes = new Map<string, HTMLInputElement>();
+  private routeHints = new Map<string, HTMLElement>();
+
+  private routeRow(spec: RouteSpec): HTMLElement[] {
+    const box = h('input', { type: 'checkbox', onchange: () => this.onRoute(spec.id, box.checked) });
+    this.routeBoxes.set(spec.id, box);
+    const hint = h('div', { class: 'muted' });
+    this.routeHints.set(spec.id, hint);
+    const swatch = h('i', { class: 'swatch' });
+    swatch.style.background = spec.colour;
+    const label = h('label', { class: 'row' }, box, swatch, h('span', {}, spec.name), info(`${spec.about ? `${spec.about} ` : ''}${spec.credit}. A copy stored with this site, not updated live; covers ${spec.coverage}. Click a route for details. The route planner follows the lines.`));
+    if (!spec.scale) return [label, hint];
+    const filter = routeFilterUi(spec.scale, null, spec.up({}) === undefined ? 'Height gain measured along the line on the map (takes a moment for many routes)' : 'Height gain as listed by the source', (value) => this.onRouteFilter(spec.id, value));
+    this.filterUis.set(spec.id, filter);
+    return [h('div', { class: 'filter-row' }, label, filter.toggle), filter.body, hint];
+  }
+
+  /** Shows a stored route collection as switched on or off (set elsewhere: page address, preset). */
+  showRoute(id: string, on: boolean): void {
+    const box = this.routeBoxes.get(id);
+    if (box) box.checked = on;
+    this.countActive();
+  }
+
+  showRouteHint(id: string, hint: string | null): void {
+    const element = this.routeHints.get(id);
+    if (element) element.textContent = hint ?? '';
+  }
+
+  // ── Huts ──
+
+  onHuts: (on: boolean) => void = () => {};
+  private hutBoxes: HTMLInputElement[] = [];
+  private hutHints: HTMLElement[] = [];
+
+  /** The hut switch appears under several topics: the copies stay in step. */
+  private hutRow(): HTMLElement[] {
+    const box = h('input', {
+      type: 'checkbox',
+      onchange: () => {
+        this.showHuts(box.checked);
+        this.onHuts(box.checked);
+      },
+    });
+    const hint = h('div', { class: 'muted' });
+    this.hutBoxes.push(box);
+    this.hutHints.push(hint);
+    return [h('label', { class: 'row' }, box, h('span', {}, 'Huts and shelters (refuges.info)'), info('Staffed huts, unstaffed shelters and lodgings from refuges.info (CC BY-SA), asked live for the area in view. Mainly the French and western Alps and the Pyrenees. Click one for details and a link.')), hint];
+  }
+
+  showHuts(on: boolean): void {
+    for (const box of this.hutBoxes) box.checked = on;
+    this.countActive();
+  }
+
+  showHutHint(hint: string | null): void {
+    for (const element of this.hutHints) element.textContent = hint ?? '';
   }
 
   // ── SAC routes ──
 
-  private sacBody = h('div', { class: 'section-body sac-body' });
-  onCamptocamp: (on: boolean) => void = () => {};
-  onCamptocampFilter: (filter: RouteFilter | null) => void = () => {};
   private filterUis = new Map<string, RouteFilterUi>();
 
-  /** Show a route filter that was set elsewhere (restored from the page address). Key: SAC discipline or "c2c". */
+  /** Show a route filter that was set elsewhere (restored from the page address). Key: SAC discipline or stored route id. */
   showRouteFilter(key: string, filter: RouteFilter | null): void {
     this.filterUis.get(key)?.set(filter);
   }
-  camptocampHint = h('div', { class: 'muted' });
-  camptocampBox = h('input', { type: 'checkbox', onchange: () => this.onCamptocamp(this.camptocampBox.checked) });
   private settingsSection: HTMLElement | null = null;
 
-  private buildSac(): HTMLElement {
-    this.sac.onHint = (hint) => (this.sacHint.textContent = hint ?? '');
-    this.renderSac();
-    const wrapper = section('Routes (SAC, Camptocamp)', false);
-    wrapper.querySelector('summary')?.append(info('Route lines from the SAC route portal. Click a route for difficulty and a link to its SAC page. Switzerland and nearby, from zoom 10.'));
-    wrapper.querySelector('.section-body')?.replaceWith(this.sacBody);
-    const swatch = h('i', { class: 'swatch' });
-    swatch.style.background = '#e8590c';
-    const c2cFilter = routeFilterUi('french', null, 'Height gain as listed on Camptocamp', (value) => this.onCamptocampFilter(value));
-    this.filterUis.set('c2c', c2cFilter);
-    wrapper.append(
-      h(
-        'div',
-        { class: 'section-body' },
-        h(
-          'div',
-          { class: 'filter-row' },
-          h(
-            'label',
-            { class: 'row' },
-            this.camptocampBox,
-            swatch,
-            h('span', {}, 'Camptocamp ski tours'),
-            info('Ski touring routes from camptocamp.org (CC BY-SA), as a copy stored with this site (Switzerland, Austria, Dolomites, Slovenia; not the French and southern Italian Alps), not updated live. Dots are routes without a drawn line. Click for details and a link. The route planner follows the lines. The filter uses Camptocamp\'s overall grade (F to ED).'),
-          ),
-          c2cFilter.toggle,
-        ),
-        c2cFilter.body,
-        this.camptocampHint,
-      ),
-    );
-    return wrapper;
+  /** The SAC route kinds that belong to a topic, as a block of its section. */
+  private sacPart(topic: string): HTMLElement {
+    const part = { body: h('div', { class: 'sac-body' }), hint: h('div', { class: 'muted' }), ids: TOPIC_SAC[topic] };
+    this.sacParts.push(part);
+    return part.body;
   }
 
   /** The discipline checkboxes, or the invitation to switch unofficial data on. */
   private renderSac(): void {
     this.sacBoxes.clear();
-    if (!unofficial.enabled) {
-      this.sacBody.replaceChildren(
-        h('div', { class: 'muted' }, 'Route lines from the SAC route portal are SAC content without an open licence. They are loaded from SAC only if you switch unofficial data on.'),
-        h('button', { type: 'button', class: 'wide plan-button', onclick: () => this.showSettings() }, 'Open Settings'),
-      );
-      return;
-    }
-    const rows = (Object.keys(SAC_DISCIPLINES) as SacDiscipline[]).flatMap((id) => {
-      const discipline = SAC_DISCIPLINES[id];
-      const swatch = h('i', { class: 'swatch' });
-      swatch.style.background = discipline.colour;
-      const box = h('input', {
-        type: 'checkbox',
-        checked: this.sac.enabled.has(id),
-        onchange: () => {
-          this.sac.setDiscipline(id, box.checked);
+    for (const part of this.sacParts) {
+      const names = part.ids.map((id) => SAC_DISCIPLINES[id].name.toLowerCase()).join(', ');
+      if (!unofficial.enabled) {
+        part.body.replaceChildren(
+          h('div', { class: 'muted sac-note' }, `SAC route portal (${names}): SAC content without an open licence, loaded only if you switch unofficial data on. `, h('a', { href: '#', onclick: (event: Event) => { event.preventDefault(); this.showSettings(); } }, 'Open Settings')),
+        );
+        continue;
+      }
+      const rows = part.ids.flatMap((id) => {
+        const discipline = SAC_DISCIPLINES[id];
+        const swatch = h('i', { class: 'swatch' });
+        swatch.style.background = discipline.colour;
+        const box = h('input', {
+          type: 'checkbox',
+          checked: this.sac.enabled.has(id),
+          onchange: () => {
+            this.sac.setDiscipline(id, box.checked);
+            this.onStateChange();
+          },
+        });
+        this.sacBoxes.set(id, box);
+        const label = h('label', { class: 'row' }, box, swatch, h('span', {}, `SAC ${discipline.name.toLowerCase()}`), info(SAC_NOTES[id] ?? SAC_NOTE));
+        if (!discipline.scale) return [label];
+        const filter = routeFilterUi(discipline.scale, this.sac.filters.get(id) ?? null, 'Height gain measured along the line on the map (takes a moment for many routes)', (value) => {
+          this.sac.setFilter(id, value);
           this.onStateChange();
-        },
+        });
+        this.filterUis.set(id, filter);
+        return [h('div', { class: 'filter-row' }, label, filter.toggle), filter.body];
       });
-      this.sacBoxes.set(id, box);
-      const label = h('label', { class: 'row' }, box, swatch, h('span', {}, discipline.name));
-      if (!discipline.scale) return [label];
-      const filter = routeFilterUi(discipline.scale, this.sac.filters.get(id) ?? null, 'Height gain measured along the line on the map (takes a moment for many routes)', (value) => {
-        this.sac.setFilter(id, value);
-        this.onStateChange();
-      });
-      this.filterUis.set(id, filter);
-      return [h('div', { class: 'filter-row' }, label, filter.toggle), filter.body];
-    });
-    this.sacBody.replaceChildren(...rows, this.sacHint);
+      part.body.replaceChildren(...rows, part.hint);
+    }
+    this.countActive();
   }
 
   private showSettings(): void {
@@ -256,6 +406,7 @@ export class Panel {
 
   syncSac(): void {
     for (const [id, box] of this.sacBoxes) box.checked = this.sac.enabled.has(id);
+    this.countActive();
   }
 
   // ── Presets ──
@@ -295,22 +446,27 @@ export class Panel {
     s.guru = false;
     void this.guru.setEnabled(false);
     this.sac.setDisciplines(unofficial.enabled ? (preset.sac ?? []) : []);
-    this.camptocampBox.checked = Boolean(preset.c2c);
-    this.onCamptocamp(this.camptocampBox.checked);
+    for (const spec of this.routes) {
+      const on = preset.routes?.includes(spec.id) ?? false;
+      this.showRoute(spec.id, on);
+      this.onRoute(spec.id, on);
+    }
+    this.showHuts(Boolean(preset.huts));
+    this.onHuts(Boolean(preset.huts));
     this.syncSac();
     void this.slf.setSnowMap(s.snow || null, undefined, s.snowOpacity);
     void this.slf.setBulletin(s.bulletin, s.bulletinOpacity);
     void this.slf.setStations(s.stations || null);
     void this.slf.setAvalanches(s.avalanches);
     this.syncSlf();
+    if (preset.topic) this.openSection(preset.topic);
     this.onStateChange();
   }
 
   /** Rebuild the SLF controls from the current state. */
   syncSlf(): void {
-    const slfSection = this.buildSlf();
-    slfSection.querySelector('summary')?.append(info('Click a region, station or avalanche on the map for details.'));
-    this.slfBox.replaceChildren(slfSection);
+    this.slfBox.replaceChildren(...this.buildSlf());
+    this.countActive();
   }
 
   /** Sunlight mode tones the generic relief shading down so it does not compete with real shadows. */
@@ -331,7 +487,7 @@ export class Panel {
       select.append(optgroup);
     }
     this.baseSelect = select;
-    return section('Base map', true, select, this.baseParamBox);
+    return this.topic('base', '🗺 Base map', true, select, this.baseParamBox);
   }
 
   private pickBase(id: string): void {
@@ -354,15 +510,6 @@ export class Panel {
 
   // ── Overlays ──
 
-  private buildOverlays(): HTMLElement {
-    const container = h('div', {});
-    for (const [group, defs] of groupBy(CATALOG.filter((l) => l.role === 'overlay'), (l) => l.group)) {
-      container.append(h('div', { class: 'group-title' }, group));
-      for (const def of defs) container.append(this.overlayRow(def));
-    }
-    return section('Overlays', false, container);
-  }
-
   private overlayRow(def: LayerDef): HTMLElement {
     const checkbox = h('input', {
       type: 'checkbox',
@@ -377,15 +524,20 @@ export class Panel {
       },
     });
     const extra = h('div', { class: 'row-extra' });
-    this.overlayRows.set(def.id, { extra, checkbox });
-    const label = h('label', { class: 'row' }, checkbox, h('span', {}, def.name), def.needsProxy ? h('span', { class: 'badge', title: 'Needs dev server or CORS proxy' }, 'proxy') : null);
+    if (!this.overlayRows.has(def.id)) this.overlayRows.set(def.id, []);
+    this.overlayRows.get(def.id)!.push({ extra, checkbox });
+    const label = h('label', { class: 'row' }, checkbox, h('span', {}, OVERLAY_NAMES[def.id] ?? def.name), OVERLAY_NOTES[def.id] ? info(OVERLAY_NOTES[def.id]) : null, def.needsProxy ? h('span', { class: 'badge', title: 'Needs dev server or CORS proxy' }, 'proxy') : null);
     return h('div', {}, label, extra);
   }
 
   syncOverlay(id: string): void {
-    const row = this.overlayRows.get(id);
     const def = byId.get(id);
-    if (!row || !def) return;
+    if (!def) return;
+    for (const row of this.overlayRows.get(id) ?? []) this.syncOverlayRow(id, def, row);
+    this.countActive();
+  }
+
+  private syncOverlayRow(id: string, def: LayerDef, row: { extra: HTMLElement; checkbox: HTMLInputElement }): void {
     const state = this.layers.overlays.get(id);
     row.checkbox.checked = !!state;
     row.extra.replaceChildren();
@@ -428,7 +580,7 @@ export class Panel {
 
   // ── SLF snow & avalanche ──
 
-  private buildSlf(): HTMLElement {
+  private buildSlf(): HTMLElement[] {
     const s = this.slfState;
     const changed = () => this.onStateChange();
 
@@ -492,17 +644,16 @@ export class Panel {
       },
     });
 
-    return section(
-      'Snow & avalanches (SLF, Switzerland)',
-      true,
-      h('div', { class: 'group-title' }, 'Snow map'),
+    stations.classList.add('counted');
+    return [
+      h('div', { class: 'group-title' }, 'Snow map (SLF)'),
       snowButtons,
       h('div', { class: 'row-extra' }, snowOpacity, snowDate),
       h('label', { class: 'row' }, bulletin, h('span', {}, 'Avalanche bulletin (danger level)')),
       h('div', { class: 'row-extra' }, bulletinOpacity),
       stations,
       h('label', { class: 'row' }, avalanches, h('span', {}, 'Recent avalanches')),
-    );
+    ];
   }
 
   // ── Terrain ──
@@ -537,8 +688,9 @@ export class Panel {
     const t = this.terrain;
     const exaggerationLabel = h('span', { class: 'value' }, `${t.exaggeration.toFixed(1)}×`);
     this.colorReliefBox = h('input', { type: 'checkbox', checked: t.colorRelief, onchange: () => this.setColorRelief(this.colorReliefBox.checked) });
-    return section(
-      'Terrain',
+    return this.topic(
+      'terrain',
+      '⛰ Terrain',
       false,
       h('label', { class: 'row' }, h('span', {}, 'Vertical exaggeration'), exaggerationLabel),
       slider(t.exaggeration, 1, 3, 0.1, (v) => {
@@ -623,7 +775,7 @@ export class Panel {
     });
     const unofficialBox = h('input', { type: 'checkbox', checked: unofficial.enabled, onchange: () => this.setUnofficial(unofficialBox.checked) });
     return (this.settingsSection = section(
-      'Settings',
+      '⚙ Settings',
       false,
       h('label', { class: 'row' }, unofficialBox, h('span', {}, 'Show unofficial third-party data'), info('SAC route portal lines and Skitourenguru risk ratings. This is their content, fetched live from their servers; no licence has been granted for showing it here. Off unless you switch it on in this browser.')),
       h(

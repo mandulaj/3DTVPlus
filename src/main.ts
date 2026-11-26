@@ -23,7 +23,9 @@ import { h, toast } from './ui/dom';
 import { unofficial } from './unofficial';
 import { enableRouteInfo } from './layers/routes';
 import { Skitourenguru } from './layers/skitourenguru';
-import { Camptocamp } from './layers/camptocamp';
+import { Huts } from './layers/huts';
+import { ROUTE_SOURCES } from './layers/routeSources';
+import { StoredRoutes } from './layers/storedRoutes';
 import { Webcams } from './layers/webcams';
 import { decodeFilter, encodeFilter } from './layers/routeFilter';
 import { SAC_DISCIPLINES, SacRoutes, type SacDiscipline } from './layers/sac';
@@ -56,14 +58,17 @@ guru.onError = toast;
 enableRouteInfo(map, layers, slf.popup);
 const sac = new SacRoutes(map, slf.popup);
 sac.onError = toast;
-const c2c = new Camptocamp(map, slf.popup);
-c2c.onError = toast;
-// The planner follows SAC and Camptocamp lines alike; the joined list is rebuilt only when either changes.
-let routeLines: { sac: unknown; c2c: unknown; all: [number, number][][] } | null = null;
+// Stored route collections (Camptocamp, Skitourenguru's network, …), by id.
+const routeSources = new Map(ROUTE_SOURCES.map((spec) => [spec.id, new StoredRoutes(map, slf.popup, spec)]));
+for (const source of routeSources.values()) source.onError = toast;
+const c2c = routeSources.get('c2c')!;
+const huts = new Huts(map, slf.popup);
+huts.onError = toast;
+// The planner follows SAC lines and the stored routes alike; the joined list is rebuilt only when one of them changes.
+let routeLines: { parts: unknown[]; all: [number, number][][] } | null = null;
 function routableLines(): [number, number][][] {
-  const a = sac.routable();
-  const b = c2c.routable();
-  if (routeLines?.sac !== a || routeLines.c2c !== b) routeLines = { sac: a, c2c: b, all: b.length ? [...a, ...b] : a };
+  const parts = [sac.routable(), ...[...routeSources.values()].map((source) => source.routable())];
+  if (!routeLines || parts.some((part, i) => part !== routeLines!.parts[i])) routeLines = { parts, all: parts.filter((part) => part.length).length === 1 ? parts.find((part) => part.length)! : parts.flat() };
   return routeLines.all;
 }
 const sun = new SunController(map);
@@ -115,8 +120,11 @@ function saveState(): void {
     slf: slfParts.join(',') || null,
     sac: [...sac.enabled].join(',') || null,
     c2c: c2c.enabled ? '1' : null,
+    // other stored route collections and huts
+    rs: [...routeSources].filter(([id, source]) => id !== 'c2c' && source.enabled).map(([id]) => id).join(',') || null,
+    huts: huts.enabled ? '1' : null,
     // route filters: "ski_tour:1~2~~1500,c2c:~3~~"
-    rf: [...[...sac.filters].map(([id, filter]) => `${id}:${encodeFilter(filter)}`), ...(c2c.filter ? [`c2c:${encodeFilter(c2c.filter)}`] : [])].join(',') || null,
+    rf: [...[...sac.filters].map(([id, filter]) => `${id}:${encodeFilter(filter)}`), ...[...routeSources].filter(([, source]) => source.filter).map(([id, source]) => `${id}:${encodeFilter(source.filter!)}`)].join(',') || null,
     terrain:
       terrain.exaggeration !== 1 || terrain.hillshade !== 0.35 || terrain.colorRelief || !terrain.water || terrain.peaks || terrain.colorReliefOpacity !== 0.5
         ? `${terrain.exaggeration}~${terrain.hillshade}~${terrain.colorRelief ? 1 : 0}~${terrain.water ? 1 : 0}~${terrain.peaks ? 1 : 0}~${terrain.colorReliefOpacity}`
@@ -127,7 +135,7 @@ function saveState(): void {
 }
 
 map.once('load', async () => {
-  const panel = new Panel(document.getElementById('panel')!, map, layers, slf, guru, sac, slfState, terrain, saveState);
+  const panel = new Panel(document.getElementById('panel')!, map, layers, slf, guru, sac, ROUTE_SOURCES, slfState, terrain, saveState);
   const sunControls = new SunControls(document.getElementById('sunbar')!, sun, () => {
     panel.setReliefScale(sun.enabled ? 0.4 : 1);
     saveState();
@@ -196,7 +204,7 @@ map.once('load', async () => {
   enableSearch(map);
   Object.assign(window, { planner });
   panel.onImport = () => tracks.chooseFiles();
-  panel.addSection(new TerrainCheck(map, slf, () => planner.line).element);
+  panel.addTo('snow', new TerrainCheck(map, slf, () => planner.line).element);
   panel.onPlan = () => (planner.isOpen ? planner.close() : planner.open());
 
   const baseParam = hash.get('base') ?? DEFAULT_BASE;
@@ -215,26 +223,36 @@ map.once('load', async () => {
   if (slfState.guru) void guru.setEnabled(true);
   if (unofficial.enabled) sac.setDisciplines((hash.get('sac') ?? '').split(',').filter((d): d is SacDiscipline => d in SAC_DISCIPLINES));
   panel.syncSac();
-  panel.onCamptocampFilter = (filter) => {
-    c2c.setFilter(filter);
+  panel.onRouteFilter = (id, filter) => {
+    routeSources.get(id)?.setFilter(filter);
     saveState();
   };
   for (const entry of (hash.get('rf') ?? '').split(',').filter(Boolean)) {
     const [key, text] = entry.split(':');
     const filter = decodeFilter(text ?? '');
-    if (key === 'c2c') c2c.setFilter(filter);
+    if (routeSources.has(key)) routeSources.get(key)!.setFilter(filter);
     else if (key in SAC_DISCIPLINES) sac.setFilter(key as SacDiscipline, filter);
     else continue;
     panel.showRouteFilter(key, filter);
   }
-  c2c.onHint = (hint) => (panel.camptocampHint.textContent = hint ?? '');
-  panel.onCamptocamp = (on) => {
-    void c2c.setEnabled(on);
+  for (const [id, source] of routeSources) source.onHint = (hint) => panel.showRouteHint(id, hint);
+  panel.onRoute = (id, on) => {
+    void routeSources.get(id)?.setEnabled(on);
     saveState();
   };
-  if (hash.get('c2c')) {
-    panel.camptocampBox.checked = true;
-    void c2c.setEnabled(true);
+  for (const id of [...(hash.get('c2c') ? ['c2c'] : []), ...(hash.get('rs') ?? '').split(',')]) {
+    if (!routeSources.has(id)) continue;
+    panel.showRoute(id, true);
+    void routeSources.get(id)!.setEnabled(true);
+  }
+  huts.onHint = (hint) => panel.showHutHint(hint);
+  panel.onHuts = (on) => {
+    huts.setEnabled(on);
+    saveState();
+  };
+  if (hash.get('huts')) {
+    panel.showHuts(true);
+    huts.setEnabled(true);
   }
   if (hash.get('sun')) sunControls.setEnabled(true);
 
@@ -311,4 +329,4 @@ async function openSharedTrack(planner: Planner): Promise<void> {
 }
 
 // Handy for debugging from the console.
-Object.assign(window, { map, layers, slf, sun, guru, sac, c2c, look });
+Object.assign(window, { map, layers, slf, sun, guru, sac, c2c, routeSources, huts, look });

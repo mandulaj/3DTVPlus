@@ -82,3 +82,52 @@ export async function elevations(points: [number, number][]): Promise<number[]> 
   for (const [lng, lat] of points) out.push(await sample(lng, lat));
   return out;
 }
+
+/**
+ * Heights on a regular grid over an area, row 0 along its northern edge. The tiles are loaded
+ * first, then read without waiting: much faster than asking point by point.
+ */
+export async function heightGrid(west: number, south: number, east: number, north: number, columns: number, rows: number): Promise<Float32Array> {
+  const mercatorY = (lat: number) => (1 - Math.log(Math.tan((lat * Math.PI) / 180) + 1 / Math.cos((lat * Math.PI) / 180)) / Math.PI) / 2;
+  const tiles = new Map<string, Tile>();
+  for (const z of ZOOMS) {
+    const n = 2 ** z;
+    const x0 = Math.floor(((west + 180) / 360) * n);
+    const x1 = Math.floor(((east + 180) / 360) * n);
+    const y0 = Math.floor(mercatorY(north) * n);
+    const y1 = Math.floor(mercatorY(south) * n);
+    const wanted: Promise<void>[] = [];
+    for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) wanted.push(loadTile(z, x, y).then((tile) => void tiles.set(`${z}/${x}/${y}`, tile)));
+    await Promise.all(wanted);
+    // The finer zoom covers everything here: no need for the coarser one.
+    if ([...tiles.values()].every((tile) => tile !== null)) break;
+  }
+  const out = new Float32Array(columns * rows);
+  for (let row = 0; row < rows; row++) {
+    const my = mercatorY(north - ((row + 0.5) / rows) * (north - south));
+    for (let column = 0; column < columns; column++) {
+      const mx = (west + ((column + 0.5) / columns) * (east - west) + 180) / 360;
+      let height = 0;
+      for (const z of ZOOMS) {
+        const n = 2 ** z;
+        const tx = Math.floor(mx * n);
+        const ty = Math.floor(my * n);
+        const tile = tiles.get(`${z}/${tx}/${ty}`);
+        if (!tile) continue;
+        const px = Math.min(SIZE - 1.001, Math.max(0, (mx * n - tx) * SIZE - 0.5));
+        const py = Math.min(SIZE - 1.001, Math.max(0, (my * n - ty) * SIZE - 0.5));
+        const ix = Math.floor(px);
+        const iy = Math.floor(py);
+        const fx = px - ix;
+        const fy = py - iy;
+        const o = iy * SIZE + ix;
+        const top = tile[o] + (tile[o + 1] - tile[o]) * fx;
+        const bottom = tile[o + SIZE] + (tile[o + SIZE + 1] - tile[o + SIZE]) * fx;
+        height = top + (bottom - top) * fy;
+        break;
+      }
+      out[row * columns + column] = height;
+    }
+  }
+  return out;
+}

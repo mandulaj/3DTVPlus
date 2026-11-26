@@ -344,6 +344,11 @@ export class Planner {
     this.add(at, 'end');
   }
 
+  /** The line of the route being planned or viewed (empty if none). */
+  get line(): Point[] {
+    return this.isOpen ? this.coords() : [];
+  }
+
   get hasRoute(): boolean {
     return this.points.length > 0;
   }

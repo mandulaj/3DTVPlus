@@ -129,7 +129,7 @@ export class Camptocamp {
     const loaded = await Promise.all(names.map((name) => this.cell(name).catch(() => null)));
     if (token !== this.request) return;
     if (loaded.some((cell) => cell === null)) this.onError('Some Camptocamp routes could not be loaded.');
-    this.onHint(all > names.length ? 'Camptocamp routes shown near the map centre only: zoom in for the rest.' : names.length ? null : 'No Camptocamp routes stored for this area (Switzerland only).');
+    this.onHint(all > names.length ? 'Camptocamp routes shown near the map centre only: zoom in for the rest.' : names.length ? null : 'No Camptocamp routes stored for this area (Switzerland and the eastern Alps only).');
     const routes = loaded.flatMap((cell) => cell ?? []);
     if (routes.length === this.loaded.length && routes.every((feature, i) => feature === this.loaded[i])) return; // same cells as before
     this.loaded = routes;

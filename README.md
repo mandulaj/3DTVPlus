@@ -33,7 +33,7 @@ It only pulls tiles and data from the public services listed below.
   On the globe the night side is shaded.
 - **Look around**: Shift+drag or middle-button drag turns the camera in place (up to just below the horizon),
   e.g. to look up a mountain from the valley floor. Normal tilt (Ctrl+drag / right-drag) stops at 78°.
-- **Camptocamp routes**: ski touring routes from [camptocamp.org](https://www.camptocamp.org) for Switzerland
+- **Camptocamp routes**: ski touring routes from [camptocamp.org](https://www.camptocamp.org) for Switzerland and the eastern Alps
   (Routes section, also part of the "Ski touring CH" preset). Lines where a track was uploaded, dots otherwise;
   click for grade, height gain, measured line and a link. The route planner follows the lines. Camptocamp's API
   does not answer other websites, so the routes are a copy stored with the site in `public/data/camptocamp/`
@@ -43,6 +43,18 @@ It only pulls tiles and data from the public services listed below.
 - **Route filters**: "Filter" beside each kind of SAC route and beside Camptocamp limits the routes on the map
   to a range of grades (T1–T6, L–EX, WT1–WT6, K1–K6; Camptocamp F–ED) and of ascent. SAC grades are looked up
   at the SAC portal and SAC ascent is measured along the line, both only while such a filter is set.
+- **Weather & conditions card**: click a forecast pill (or right-click the map, "Weather here") for current
+  weather at that height, freezing level, nearest SLF snow stations, the avalanche bulletin of the region and
+  tables for the last 3 and next 7 days. The place name in the card links to MeteoSwiss (yr.no abroad).
+- **Webcams**: camera icons with a link to the webcam. From OpenStreetMap, as a stored copy for Switzerland and
+  around (`node scripts/fetch-webcams.mjs` refreshes it); with your own free Windy Webcams API key (Settings)
+  from Windy instead, with preview pictures.
+- **Avalanche terrain check**: draw an area, or take a 150 m strip along the route in the planner; every 10 m
+  cell is classed low / elevated / high after the Graphical Reduction Method (danger level against the steepest
+  ground within 20 m, one level lower outside the critical aspects and heights) from today's SLF bulletin or a
+  level set by hand. Blue marks gentler ground that avalanches from critical slopes above could reach. It reads
+  terrain shape only: a planning aid, not an assessment of the snowpack.
+- **Import track**: button beside "Plan a route" (same as dropping GPX, TCX or FIT files on the page).
 - **More controls**: Ctrl+middle-drag swings the camera around the point under the cursor; double middle-click
   puts north up; Shift+wheel moves forward and back keeping height above ground; Alt+wheel changes the time of
   day while sunlight is on (Alt+Shift: single minutes). Keys: W A S D move, Q E turn, R F tilt (Shift: faster),

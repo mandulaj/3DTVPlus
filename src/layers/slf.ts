@@ -24,7 +24,15 @@ export interface SnowSampler {
 /** Reads the avalanche bulletin shown on the map at single points (for the route profile). */
 export interface DangerSampler {
   /** Danger level of the bulletin region at a point; null outside the bulletin area or without a rating. */
-  at(lng: number, lat: number): { level: number; name: string; colour: string; region: string; bands: { from: number; to: number }[] } | null;
+  at(lng: number, lat: number): {
+    level: number;
+    name: string;
+    colour: string;
+    region: string;
+    bands: { from: number; to: number }[];
+    /** Where the danger mainly is, from the bulletin's first avalanche problem: aspects as a bit set (bit 0 = N, 1 = NE, … clockwise; 255 = all) and the height it applies above (-1: all heights). */
+    core: { aspects: number; above: number };
+  } | null;
 }
 
 export interface Legend {
@@ -59,6 +67,48 @@ const DANGER: Record<string, { level: number; color: string }> = {
   high: { level: 4, color: '#ff0000' },
   very_high: { level: 5, color: '#a00000' },
 };
+interface BulletinRegion {
+  box: number[];
+  rings: number[][][][];
+  properties: Record<string, any>;
+}
+
+/** The bulletin's regions with their outlines, ready for point lookups. */
+function regionsOf(data: { features: any[] }): BulletinRegion[] {
+  return data.features
+    .filter((f) => f.geometry?.type === 'Polygon' || f.geometry?.type === 'MultiPolygon')
+    .map((f) => {
+      const rings: number[][][][] = f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates;
+      const box = [Infinity, Infinity, -Infinity, -Infinity];
+      for (const polygon of rings) {
+        for (const [x, y] of polygon[0]) {
+          if (x < box[0]) box[0] = x;
+          if (y < box[1]) box[1] = y;
+          if (x > box[2]) box[2] = x;
+          if (y > box[3]) box[3] = y;
+        }
+      }
+      return { box, rings, properties: f.properties ?? {} };
+    });
+}
+
+function regionHolds(region: BulletinRegion, lng: number, lat: number): boolean {
+  const [minX, minY, maxX, maxY] = region.box;
+  if (lng < minX || lng > maxX || lat < minY || lat > maxY) return false;
+  // Inside one of the polygons: within its outer ring and not in a hole (even-odd over all rings).
+  return region.rings.some((polygon) => {
+    let hit = false;
+    for (const ring of polygon) {
+      for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+        const [xi, yi] = ring[i];
+        const [xj, yj] = ring[j];
+        if (yi > lat !== yj > lat && lng < ((xj - xi) * (lat - yi)) / (yj - yi) + xi) hit = !hit;
+      }
+    }
+    return hit;
+  });
+}
+
 const SUBDIVISION: Record<string, string> = { minus: '−', neutral: '=', plus: '+' };
 
 const R = 6378137;
@@ -275,29 +325,14 @@ export class SlfLayers {
 
   /** Told whenever the bulletin shown changes (loaded or switched off). */
   onBulletinChange: () => void = () => {};
-  private bulletinRegions: { box: number[]; rings: number[][][][]; properties: Record<string, any> }[] | null = null;
+  private bulletinRegions: BulletinRegion[] | null = null;
 
   /** The bulletin on screen as a lookup by position, or null if it is not shown. */
   dangerSampler(): DangerSampler | null {
     const regions = this.bulletinRegions;
     if (!regions) return null;
     let last: (typeof regions)[number] | null = null; // neighbouring samples are usually in the same region
-    const inside = (region: (typeof regions)[number], lng: number, lat: number) => {
-      const [minX, minY, maxX, maxY] = region.box;
-      if (lng < minX || lng > maxX || lat < minY || lat > maxY) return false;
-      // Inside one of the polygons: within its outer ring and not in a hole (even-odd over all rings).
-      return region.rings.some((polygon) => {
-        let hit = false;
-        for (const ring of polygon) {
-          for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-            const [xi, yi] = ring[i];
-            const [xj, yj] = ring[j];
-            if (yi > lat !== yj > lat && lng < ((xj - xi) * (lat - yi)) / (yj - yi) + xi) hit = !hit;
-          }
-        }
-        return hit;
-      });
-    };
+    const inside = regionHolds;
     return {
       at: (lng, lat) => {
         const region = last && inside(last, lng, lat) ? last : (regions.find((r) => inside(r, lng, lat)) ?? null);
@@ -312,9 +347,55 @@ export class SlfLayers {
           .map((a) => ({ from: Number(a.elevation?.lowerBound), to: Number(a.elevation?.upperBound) }))
           .map((b) => ({ from: Number.isFinite(b.from) ? b.from : -Infinity, to: Number.isFinite(b.to) ? b.to : Infinity }))
           .filter((b) => Number.isFinite(b.from) || Number.isFinite(b.to));
-        return { level: danger.level, name: pretty(rating.mainValue), colour: danger.color, region: (p.regions ?? []).map((r: any) => r.name).join(', '), bands };
+        const main = ((p.avalancheProblems ?? []) as any[])[0];
+        const sectors = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+        const listed = ((main?.aspects ?? []) as string[]).reduce((bits, name) => bits | (sectors.includes(name) ? 1 << sectors.indexOf(name) : 0), 0);
+        const lower = Number(main?.elevation?.lowerBound);
+        const core = { aspects: listed || 255, above: Number.isFinite(lower) ? lower : -1 };
+        return { level: danger.level, name: pretty(rating.mainValue), colour: danger.color, region: (p.regions ?? []).map((r: any) => r.name).join(', '), bands, core };
       },
     };
+  }
+
+  /**
+   * The bulletin for the region a point lies in, as the HTML the bulletin popup shows, or null
+   * outside the bulletin's area. Loads the bulletin if it is not on the map.
+   */
+  async bulletinAt(lng: number, lat: number): Promise<string | null> {
+    if (!this.bulletinRegions) {
+      this.bulletinLoad ??= fetch('https://aws.slf.ch/api/bulletin/caaml/en/geojson')
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+        .then((data) => {
+          this.bulletinRegions ??= regionsOf(data);
+          this.onBulletinChange();
+        })
+        .finally(() => (this.bulletinLoad = null));
+      await this.bulletinLoad;
+    }
+    const region = (this.bulletinRegions ?? []).find((r) => regionHolds(r, lng, lat));
+    return region ? this.bulletinHtml(region.properties) : null;
+  }
+  private bulletinLoad: Promise<void> | null = null;
+
+  private stationLists = new Map<StationType, { fetched: number; features: any[] }>();
+
+  /** The nearest stations measuring something (snow depth, new snow…), nearest first; empty if none within `reach` km. */
+  async nearestStations(type: StationType, lng: number, lat: number, count: number, reach = 40): Promise<{ name: string; elevation: number; value: number; km: number; time: string }[]> {
+    let list = this.stationLists.get(type);
+    if (!list || Date.now() - list.fetched > 30 * 60000) {
+      const data = await fetch(`https://public-meas-data-v2.slf.ch/public/station-data/timepoint/${type}/current/geojson`).then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))));
+      list = { fetched: Date.now(), features: (data.features as any[]).filter((f) => f.properties?.value !== null && f.properties?.value !== undefined) };
+      this.stationLists.set(type, list);
+    }
+    const scale = Math.cos((lat * Math.PI) / 180);
+    return list.features
+      .map((f) => {
+        const [x, y] = f.geometry.coordinates;
+        return { name: String(f.properties.label), elevation: Number(f.properties.elevation), value: Number(f.properties.value), km: Math.hypot((x - lng) * scale, y - lat) * 111.32, time: String(f.properties.timestamp) };
+      })
+      .filter((station) => station.km <= reach)
+      .sort((a, b) => a.km - b.km)
+      .slice(0, count);
   }
 
   async setBulletin(on: boolean, opacity = 0.45): Promise<void> {
@@ -328,21 +409,7 @@ export class SlfLayers {
         return r.json();
       });
       if (this.map.getSource('slf-bulletin')) return;
-      this.bulletinRegions = (data.features as any[])
-        .filter((f) => f.geometry?.type === 'Polygon' || f.geometry?.type === 'MultiPolygon')
-        .map((f) => {
-          const rings: number[][][][] = f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates;
-          const box = [Infinity, Infinity, -Infinity, -Infinity];
-          for (const polygon of rings) {
-            for (const [x, y] of polygon[0]) {
-              if (x < box[0]) box[0] = x;
-              if (y < box[1]) box[1] = y;
-              if (x > box[2]) box[2] = x;
-              if (y > box[3]) box[3] = y;
-            }
-          }
-          return { box, rings, properties: f.properties ?? {} };
-        });
+      this.bulletinRegions = regionsOf(data);
       this.onBulletinChange();
       const withRating = data.features.find((f: any) => f.properties?.validTime);
       this.map.addSource('slf-bulletin', { type: 'geojson', data, attribution: `${SLF_ATTRIBUTION} avalanche bulletin (CC BY 4.0)` });

@@ -5,9 +5,10 @@ export type LayerParam =
   | { kind: 'date'; daysAgo: number }
   | { kind: 'select'; options: { value: string; label: string }[]; default: string };
 
-/** Providers whose tiles need a personal API key (entered under Settings, kept in the browser). */
+/** Providers whose data needs a personal API key (entered under Settings, kept in the browser). */
 export const KEY_PROVIDERS = {
   mapy: { name: 'Mapy.com', help: 'Free key from developer.mapy.com' },
+  windy: { name: 'Windy webcams', help: 'Free Webcams API key from api.windy.com (webcams with preview pictures)' },
 } as const;
 export type KeyProvider = keyof typeof KEY_PROVIDERS;
 

@@ -98,6 +98,8 @@ export interface TrackList {
   add(name: string, coords: Point[]): string;
   /** Replace a track's name and line (edited in the route planner). False if it no longer exists. */
   update(id: string, name: string, coords: Point[]): boolean;
+  /** Ask the user for GPX, TCX or FIT files and show them (same as dropping them on the page). */
+  chooseFiles(): void;
   /** Called when the user asks to open a track in the route planner. */
   onEdit: (id: string, name: string, coords: Point[]) => void;
   /** Called when the user asks for a link that carries a track. */
@@ -142,6 +144,11 @@ export function enableTrackDrop(map: maplibregl.Map, listParent: HTMLElement): T
       render();
       save();
       return true;
+    },
+    chooseFiles() {
+      const input = h('input', { type: 'file', accept: '.gpx,.tcx,.fit,application/gpx+xml', multiple: true });
+      input.addEventListener('change', () => void addFiles([...(input.files ?? [])]));
+      input.click();
     },
     onEdit: () => {},
     onShare: () => {},

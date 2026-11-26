@@ -18,7 +18,7 @@ const MAX_PEAKS = 6;
 const SPACING = 150; // px between forecast points
 const CACHE_MINUTES = 30;
 
-interface Spot {
+export interface Spot {
   key: string;
   name: string;
   at: [number, number];
@@ -40,7 +40,7 @@ interface Forecast {
 }
 
 /** WMO weather code → symbol and words. */
-function symbol(code: number): [string, string] {
+export function symbol(code: number): [string, string] {
   if (code === 0) return ['☀️', 'clear'];
   if (code === 1) return ['🌤️', 'mostly clear'];
   if (code === 2) return ['⛅', 'partly cloudy'];
@@ -55,21 +55,19 @@ function symbol(code: number): [string, string] {
   return ['❔', 'unknown'];
 }
 
-const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+export const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
 
 const METEOSWISS = 'https://www.meteoswiss.admin.ch';
 // MeteoSwiss's English pages use English names for these; all others use the local name.
 const EXONYMS: Record<string, string> = { zuerich: 'zurich', geneve: 'geneva', luzern: 'lucerne' };
 
 /**
- * Opens MeteoSwiss's local forecast for the place at a point, in a new tab. Its pages are addressed
- * by place name and postcode, which the official register of localities (geo.admin.ch) gives for
- * any point in Switzerland; a summit gets the forecast page of the locality it stands in.
+ * The address of MeteoSwiss's local forecast for the place at a point, or null outside
+ * Switzerland. Its pages are addressed by place name and postcode, which the official register
+ * of localities (geo.admin.ch) gives for any point in Switzerland; a summit gets the forecast
+ * page of the locality it stands in.
  */
-async function openMeteoSwiss(at: [number, number]): Promise<void> {
-  // The tab must be opened while the click is being handled, or the browser blocks it.
-  const tab = window.open('', '_blank');
-  let address = `${METEOSWISS}/`;
+export async function meteoSwissAddress(at: [number, number]): Promise<string | null> {
   try {
     const query = new URLSearchParams({
       geometryType: 'esriGeometryPoint',
@@ -83,29 +81,28 @@ async function openMeteoSwiss(at: [number, number]): Promise<void> {
     });
     const data = await (await fetch(`https://api3.geo.admin.ch/rest/services/all/MapServer/identify?${query}`)).json();
     const place = data.results?.[0]?.attributes;
-    if (place?.plz && place.langtext) {
-      const plain = String(place.langtext)
-        .toLowerCase()
-        .replace(/ä/g, 'ae')
-        .replace(/ö/g, 'oe')
-        .replace(/ü/g, 'ue')
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '') // other accents
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-|-$/g, '');
-      address = `${METEOSWISS}/local-forecasts/${EXONYMS[plain] ?? plain}/${place.plz}.html`;
-    }
+    if (!place?.plz || !place.langtext) return null;
+    const plain = String(place.langtext)
+      .toLowerCase()
+      .replace(/ä/g, 'ae')
+      .replace(/ö/g, 'oe')
+      .replace(/ü/g, 'ue')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '') // other accents
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '');
+    return `${METEOSWISS}/local-forecasts/${EXONYMS[plain] ?? plain}/${place.plz}.html`;
   } catch {
-    /* outside Switzerland or lookup unavailable: MeteoSwiss's front page */
+    return null; // lookup unavailable
   }
-  if (tab) tab.location.href = address;
-  else window.open(address, '_blank');
 }
 
 export class Weather {
   enabled = false;
   day = 0;
   onChange: () => void = () => {};
+  /** A forecast pill was clicked. */
+  onOpen: (spot: Spot) => void = () => {};
   private bar = h('div', { class: 'weather-days', hidden: true });
   private cache = new Map<string, Forecast>();
   private markers = new Map<string, maplibregl.Marker>();
@@ -136,6 +133,13 @@ export class Weather {
       this.markers.clear();
     }
   }
+
+  /** Marks the pill whose card is open (null: none). */
+  setOpen(key: string | null): void {
+    this.openKey = key;
+    for (const [id, marker] of this.markers) marker.getElement().classList.toggle('open', id === key);
+  }
+  private openKey: string | null = null;
 
   private schedule(delay = 500): void {
     if (!this.enabled) return;
@@ -247,12 +251,13 @@ export class Weather {
         const element = h('div', { class: `weather-spot${spot.ele !== undefined ? ' summit' : ''}` });
         element.addEventListener('click', (event) => {
           event.stopPropagation();
-          void openMeteoSwiss(spot.at);
+          this.onOpen(spot);
         });
         marker = new maplibregl.Marker({ element, anchor: 'bottom', opacityWhenCovered: '0.25' }).setLngLat(spot.at).addTo(this.map);
         this.markers.set(spot.key, marker);
       }
       this.fill(marker.getElement(), spot, forecast);
+      marker.getElement().classList.toggle('open', spot.key === this.openKey);
     }
     this.renderDays(spots.map((s) => this.cache.get(s.key)).find(Boolean));
   }
@@ -264,7 +269,7 @@ export class Weather {
     arrow.style.transform = `rotate(${(f.direction[i] + 180) % 360}deg)`; // the arrow points where the wind blows to
     const from = COMPASS[Math.round(f.direction[i] / 45) % 8];
     const wet = f.snow[i] >= 0.5 ? `, ${f.snow[i].toFixed(0)} cm new snow` : f.rain[i] >= 0.5 ? `, ${f.rain[i].toFixed(0)} mm rain` : '';
-    element.title = `Click for MeteoSwiss's forecast for this place.\n${spot.name}${spot.ele !== undefined ? ` (${Math.round(spot.ele)} m)` : ''}: ${words}, ${Math.round(f.min[i])}° to ${Math.round(f.max[i])}°, wind from ${from} up to ${Math.round(f.wind[i])} km/h, gusts ${Math.round(f.gusts[i])} km/h${wet}`;
+    element.title = `Click for weather and conditions here.\n${spot.name}${spot.ele !== undefined ? ` (${Math.round(spot.ele)} m)` : ''}: ${words}, ${Math.round(f.min[i])}° to ${Math.round(f.max[i])}°, wind from ${from} up to ${Math.round(f.wind[i])} km/h, gusts ${Math.round(f.gusts[i])} km/h${wet}`;
     element.replaceChildren(
       h('span', { class: 'weather-icon' }, icon),
       h(

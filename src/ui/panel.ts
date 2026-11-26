@@ -82,9 +82,20 @@ export class Panel {
   onPeaks: (on: boolean) => void = () => {};
   /** Set by the app: switches the weather forecast on the map. */
   onWeather: (on: boolean) => void = () => {};
+  onWebcams: (on: boolean) => void = () => {};
+  /** An API key was entered or removed under Settings. */
+  onKey: (provider: KeyProvider) => void = () => {};
+  webcamBox = h('input', { type: 'checkbox', onchange: () => this.onWebcams(this.webcamBox.checked) });
+  webcamHint = h('div', { class: 'muted' });
   weatherBox = h('input', { type: 'checkbox', onchange: () => this.onWeather(this.weatherBox.checked) });
   /** Set by the app: opens or closes the route planner. */
+  /** Adds a tool's own section to the panel, above Settings. */
+  addSection(section: HTMLElement): void {
+    this.settingsSection?.before(section);
+  }
+
   onPlan: () => void = () => {};
+  onImport: () => void = () => {};
 
   constructor(
     private root: HTMLElement,
@@ -132,9 +143,11 @@ export class Panel {
 
   private buildWeather(): HTMLElement {
     return section(
-      'Weather forecast',
+      'Weather & webcams',
       false,
       h('label', { class: 'row' }, this.weatherBox, h('span', {}, 'Towns and summits in view'), info('Lowest and highest temperature, weather and strongest wind (km/h, arrow shows where it blows to) for the day chosen at the top of the map. Model forecast from Open-Meteo; in and around Switzerland from the MeteoSwiss ICON model. Summit values are for summit height.')),
+      h('label', { class: 'row' }, this.webcamBox, h('span', {}, 'Webcams'), info('Camera icons where a webcam is known; click one for a link to it. Without setup they come from OpenStreetMap (a stored copy for Switzerland and around; link only). With your own free Windy Webcams API key (Settings) they come from Windy, with a preview picture.')),
+      this.webcamHint,
     );
   }
 
@@ -176,7 +189,7 @@ export class Panel {
             this.camptocampBox,
             swatch,
             h('span', {}, 'Camptocamp ski tours'),
-            info('Ski touring routes from camptocamp.org (CC BY-SA), as a copy stored with this site: Switzerland, not updated live. Dots are routes without a drawn line. Click for details and a link. The route planner follows the lines. The filter uses Camptocamp\'s overall grade (F to ED).'),
+            info('Ski touring routes from camptocamp.org (CC BY-SA), as a copy stored with this site (Switzerland, Austria, Dolomites, Slovenia; not the French and southern Italian Alps), not updated live. Dots are routes without a drawn line. Click for details and a link. The route planner follows the lines. The filter uses Camptocamp\'s overall grade (F to ED).'),
           ),
           c2cFilter.toggle,
         ),
@@ -259,8 +272,9 @@ export class Panel {
     });
     select.append(h('option', { value: '' }, 'Apply preset…'));
     for (const preset of PRESETS) select.append(h('option', { value: preset.id }, preset.name));
-    const plan = h('button', { type: 'button', class: 'wide plan-button', title: 'Draw a route on the map: distance, ascent, elevation profile, GPX export', onclick: () => this.onPlan() }, '✎ Plan a route');
-    return h('div', { class: 'section-body preset-box' }, select, plan);
+    const plan = h('button', { type: 'button', class: 'plan-button', title: 'Draw a route on the map: distance, ascent, elevation profile, GPX export', onclick: () => this.onPlan() }, '✎ Plan a route');
+    const open = h('button', { type: 'button', class: 'plan-button', title: 'Show recorded tracks from GPX, TCX or FIT files on the map (or drop the files on the page)', onclick: () => this.onImport() }, '⇪ Import track');
+    return h('div', { class: 'section-body preset-box' }, select, h('div', { class: 'plan-row' }, plan, open));
   }
 
   async applyPreset(preset: Preset): Promise<void> {
@@ -599,6 +613,7 @@ export class Panel {
         value: this.layers.getKey(provider),
         onchange: () => {
           this.layers.setKey(provider, field.value.trim());
+          this.onKey(provider);
           // Reload the base map if it was waiting for this key.
           const selected = byId.get(this.baseSelect.value);
           if (selected?.needsKey === provider) void this.layers.setBase(selected.id).then(() => this.syncBase());

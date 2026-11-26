@@ -2,13 +2,14 @@
 import type * as maplibregl from 'maplibre-gl';
 import { elevations } from './elevation';
 import { interaction } from './interaction';
+import { vectorLayers } from './map';
 import { toLv95 } from './swissGrid';
 import type { LookAround } from './lookAround';
 import { placeName } from './places';
 import type { Planner } from './planner';
 
 const RAD = Math.PI / 180;
-export function enableContextMenu(map: maplibregl.Map, popup: maplibregl.Popup, planner: Planner, look: LookAround): void {
+export function enableContextMenu(map: maplibregl.Map, popup: maplibregl.Popup, planner: Planner, look: LookAround, onWeather: (spot: { key: string; name: string; at: [number, number] }) => void = () => {}): void {
   let here: { lng: number; lat: number; height: number | null } | null = null;
   let request = 0;
 
@@ -85,6 +86,7 @@ export function enableContextMenu(map: maplibregl.Map, popup: maplibregl.Popup, 
           `<div class="popup-links">` +
           `<button type="button" data-context="route">${planner.isOpen && planner.hasRoute ? 'Add to route' : 'Start route here'}</button>` +
           `<button type="button" data-context="view">View from here</button>` +
+          `<button type="button" data-context="weather">Weather here</button>` +
           `<button type="button" data-context="copy">Copy coordinates</button></div></div>`,
       )
       .addTo(map);
@@ -109,7 +111,7 @@ export function enableContextMenu(map: maplibregl.Map, popup: maplibregl.Popup, 
     // Nearest named summit, if the peak data happens to be loaded.
     try {
       let best: { name: string; ele: number; distance: number } | null = null;
-      for (const feature of map.querySourceFeatures('water', { sourceLayer: 'mountain_peak' })) {
+      for (const feature of map.querySourceFeatures('water', { sourceLayer: vectorLayers.peak })) {
         if (feature.geometry.type !== 'Point') continue;
         const [x, y] = feature.geometry.coordinates;
         const distance = Math.hypot((x - lng) * Math.cos(lat * RAD) * 111320, (y - lat) * 111320);
@@ -142,6 +144,12 @@ export function enableContextMenu(map: maplibregl.Map, popup: maplibregl.Popup, 
         const exaggeration = map.getTerrain()?.exaggeration ?? 1;
         // Eye height: a little above the ground, so the terrain right underfoot does not fill the view.
         look.standAt([lng, lat], height * exaggeration + 3, map.getBearing(), 80);
+        break;
+      }
+      case 'weather': {
+        const name = popup.getElement()?.querySelector('[data-field="place"]')?.textContent || 'Location';
+        popup.remove();
+        onWeather({ key: `${lng.toFixed(3)},${lat.toFixed(3)}`, name: name === 'Location' ? `${lat.toFixed(3)}°N ${lng.toFixed(3)}°E` : name, at: [lng, lat] });
         break;
       }
       case 'copy': {

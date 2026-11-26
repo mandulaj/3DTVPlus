@@ -6,7 +6,9 @@ import { enableLookAround } from './lookAround';
 import { enableTrackDrop } from './tracks';
 import { PeakLabels } from './peaks';
 import { Planner } from './planner';
+import { TerrainCheck } from './analysis/analysisTool';
 import { enableContextMenu } from './contextMenu';
+import { WeatherCard } from './weatherCard';
 import { enableSearch } from './search';
 import { Weather } from './weather';
 import { decodeShare, decodeTrack, encodeShare, encodeTrack, type SharedView } from './share';
@@ -22,6 +24,7 @@ import { unofficial } from './unofficial';
 import { enableRouteInfo } from './layers/routes';
 import { Skitourenguru } from './layers/skitourenguru';
 import { Camptocamp } from './layers/camptocamp';
+import { Webcams } from './layers/webcams';
 import { decodeFilter, encodeFilter } from './layers/routeFilter';
 import { SAC_DISCIPLINES, SacRoutes, type SacDiscipline } from './layers/sac';
 
@@ -133,6 +136,23 @@ map.once('load', async () => {
   const peaks = new PeakLabels(map, look);
   const weather = new Weather(map);
   weather.onChange = saveWeather;
+  const weatherCard = new WeatherCard(slf);
+  weather.onOpen = (spot) => weatherCard.open(spot);
+  weatherCard.onChange = (spot) => weather.setOpen(spot?.key ?? null);
+  const webcams = new Webcams(map, slf.popup, () => layers.getKey('windy'));
+  webcams.onError = toast;
+  webcams.onHint = (hint) => (panel.webcamHint.textContent = hint ?? '');
+  panel.onWebcams = (on) => {
+    webcams.setEnabled(on);
+    writeHash({ cams: on ? '1' : null });
+  };
+  panel.onKey = (provider) => {
+    if (provider === 'windy') webcams.refresh();
+  };
+  if (hash.get('cams')) {
+    panel.webcamBox.checked = true;
+    webcams.setEnabled(true);
+  }
   panel.onWeather = (on) => {
     weather.setEnabled(on);
     saveWeather();
@@ -172,9 +192,11 @@ map.once('load', async () => {
   tracks.onView = (id, name, coords, recorded) => planner.view(name, coords, id, recorded);
   slf.onSnowChange = () => planner.refresh();
   slf.onBulletinChange = () => planner.refresh();
-  enableContextMenu(map, slf.popup, planner, look);
+  enableContextMenu(map, slf.popup, planner, look, (spot) => weatherCard.open(spot));
   enableSearch(map);
   Object.assign(window, { planner });
+  panel.onImport = () => tracks.chooseFiles();
+  panel.addSection(new TerrainCheck(map, slf, () => planner.line).element);
   panel.onPlan = () => (planner.isOpen ? planner.close() : planner.open());
 
   const baseParam = hash.get('base') ?? DEFAULT_BASE;

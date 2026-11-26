@@ -7,6 +7,7 @@ import { enableTrackDrop } from './tracks';
 import { PeakLabels } from './peaks';
 import { Planner } from './planner';
 import { TerrainCheck } from './analysis/analysisTool';
+import { Playground } from './playground/playground';
 import { enableContextMenu } from './contextMenu';
 import { WeatherCard } from './weatherCard';
 import { enableSearch } from './search';
@@ -197,6 +198,9 @@ map.once('load', async () => {
   Object.assign(window, { planner });
   panel.onImport = () => tracks.chooseFiles();
   panel.addSection(new TerrainCheck(map, slf, () => planner.line).element);
+  const playground = new Playground(map);
+  panel.addSection(playground.element);
+  Object.assign(window, { playground });
   panel.onPlan = () => (planner.isOpen ? planner.close() : planner.open());
 
   const baseParam = hash.get('base') ?? DEFAULT_BASE;

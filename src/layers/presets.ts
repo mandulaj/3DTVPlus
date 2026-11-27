@@ -22,7 +22,7 @@ export interface Preset {
 export const PRESETS: Preset[] = [
   {
     id: 'ski-touring-ch',
-    name: '⛷ Ski touring',
+    name: '⛷️ Ski touring',
     base: 'ch-map-winter',
     overlays: [{ id: 'ch-slope30', opacity: 0.25 }, { id: 'ch-wildlife' }, { id: 'ch-skitouren' }],
     sac: ['ski_tour'],
@@ -33,7 +33,7 @@ export const PRESETS: Preset[] = [
   },
   {
     id: 'snowshoe-ch',
-    name: '❄ Snowshoe',
+    name: '❄️ Snowshoe',
     base: 'ch-map-winter',
     overlays: [{ id: 'ch-slope30', opacity: 0.5 }, { id: 'ch-wildlife' }, { id: 'ch-snowshoe' }],
     sac: ['snowshoe_tour'],
@@ -43,7 +43,7 @@ export const PRESETS: Preset[] = [
   },
   {
     id: 'avalanche-terrain-ch',
-    name: '⚠ Avalanche terrain',
+    name: '⚠️ Avalanche terrain',
     base: 'ch-map-winter',
     overlays: [{ id: 'ch-slope-classes', opacity: 0.6 }, { id: 'ch-protect-forest' }],
     topic: 'snow',
@@ -51,7 +51,7 @@ export const PRESETS: Preset[] = [
   },
   {
     id: 'snow-conditions-ch',
-    name: '🌨 Snow conditions',
+    name: '🌨️ Snow conditions',
     base: 'ch-map-grey',
     overlays: [],
     topic: 'snow',
@@ -61,6 +61,6 @@ export const PRESETS: Preset[] = [
   { id: 'hiking-ch', name: '🥾 Hiking', base: 'ch-map', overlays: [{ id: 'ch-hiking' }, { id: 'ch-wanderland' }, { id: 'wmt-hiking', opacity: 0.7 }], sac: ['mountain_hiking'], huts: true, topic: 'hiking' },
   { id: 'biking-ch', name: '🚲 Biking', base: 'ch-map', overlays: [{ id: 'ch-veloland' }, { id: 'ch-mtbland' }, { id: 'wmt-cycling', opacity: 0.7 }, { id: 'wmt-mtb', opacity: 0.7 }], topic: 'cycling' },
   { id: 'pistes', name: '🎿 Ski pistes (worldwide)', base: 'opentopo', overlays: [{ id: 'osm-pistes' }], topic: 'ski' },
-  { id: 'aerial-ch', name: '🛰 Aerial CH', base: 'ch-ortho', overlays: [] },
-  { id: 'historic-photos-ch', name: '🕰 Historic photos CH (1946)', base: 'ch-map', overlays: [{ id: 'ch-photos' }], topic: 'more' },
+  { id: 'aerial-ch', name: '🛰️ Aerial CH', base: 'ch-ortho', overlays: [] },
+  { id: 'historic-photos-ch', name: '🕰️ Historic photos CH (1946)', base: 'ch-map', overlays: [{ id: 'ch-photos' }], topic: 'more' },
 ];

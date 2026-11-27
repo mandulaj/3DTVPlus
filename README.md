@@ -48,8 +48,10 @@ It only pulls tiles and data from the public services listed below.
   `node scripts/fetch-snowshoe.mjs`.
 - **Huts**: staffed huts, shelters and lodgings from refuges.info, asked live for the area in view (mainly the
   French and western Alps).
-- **Condition reports**: recent tour reports from gipfelbuch.ch as pins coloured by age (today … older), with
-  a "since" filter (3 days to 1 month). Click a pin for a short excerpt and a link to the report. gipfelbuch.ch
+- **Condition reports**: recent tour reports from gipfelbuch.ch as pins coloured by activity (blue snow, green
+  hiking, gray climbing), fading from vivid to very light with age, plus a corner status dot for reported
+  conditions (excellent / good / doable / poor) and a "since" filter (3 days to 1 month). Click a pin for a short
+  excerpt and a link to the report. gipfelbuch.ch
   cannot be asked from a web page, so the list is a stored copy: `node scripts/fetch-gipfelbuch.mjs` refreshes
   it, and `.github/workflows/gipfelbuch.yml` does so three times a day on the published page.
 - **Route preview**: clicking a route line (SAC, swisstopo ski/snowshoe, Skitourenguru networks, Camptocamp)

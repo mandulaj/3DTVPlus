@@ -1,9 +1,12 @@
-// Recent condition reports from gipfelbuch.ch as pins: coloured by age, click for a short excerpt
-// and a link to the report. gipfelbuch.ch cannot be asked from a web page (no cross-origin
+// Recent condition reports from gipfelbuch.ch as pins: coloured by activity (snow/hiking/climbing)
+// with saturation fading by age, plus a corner dot for reported conditions. Click for a short
+// excerpt and a link to the report. gipfelbuch.ch cannot be asked from a web page (no cross-origin
 // permission), so the list is a copy stored with the site (scripts/fetch-gipfelbuch.mjs) and is
 // as fresh as its last refresh.
 import * as maplibregl from 'maplibre-gl';
+import { interaction } from '../interaction';
 import { h } from '../ui/dom';
+import type { Legend } from './slf';
 
 const DATA = './data/gipfelbuch.json';
 const SITE = 'https://www.gipfelbuch.ch/verhaeltnisse/';
@@ -34,17 +37,31 @@ export const REPORT_SPANS: { days: number; name: string }[] = [
   { days: 30, name: '1 month' },
 ];
 
-/** Pin colours by age of the report, freshest first. */
-export const REPORT_AGES: { upTo: number; colour: string; name: string }[] = [
-  { upTo: 1, colour: '#e5383b', name: 'today, yesterday' },
-  { upTo: 3, colour: '#f3722c', name: '2–3 days' },
-  { upTo: 7, colour: '#f9c74f', name: '4–7 days' },
-  { upTo: 14, colour: '#90be6d', name: '1–2 weeks' },
-  { upTo: Infinity, colour: '#8d99ae', name: 'older' },
+export type ReportTheme = 'snow' | 'hiking' | 'climbing';
+
+/** Age cutoffs (days) matching each theme's 5-step saturation/lightness ramp: 0–1d, 2–3d, 4–7d, 8–14d, older. */
+const AGE_STEPS = [1, 3, 7, 14, Infinity] as const;
+
+/** Activity themes: vivid & saturated when fresh, progressively desaturated & lighter with age. */
+export const REPORT_THEMES: Record<ReportTheme, { name: string; colours: readonly [string, string, string, string, string] }> = {
+  snow: { name: 'Snow', colours: ['#1565c0', '#3b82f6', '#7cb3f0', '#b6d4f7', '#e1effe'] },
+  hiking: { name: 'Hiking', colours: ['#15803d', '#2ea058', '#6ec48c', '#b0e0c0', '#e2f5e9'] },
+  climbing: { name: 'Climbing', colours: ['#334155', '#526071', '#8492a6', '#bcc6d4', '#e6ebf1'] },
+};
+
+/** Author's condition verdict mapped to a traffic-light indicator dot. */
+export const REPORT_VERDICTS: { key: string; label: string; colour: string }[] = [
+  { key: 'ausgezeichnet', label: 'excellent', colour: '#16a34a' },
+  { key: 'gut', label: 'good', colour: '#84cc16' },
+  { key: 'machbar', label: 'doable', colour: '#eab308' },
+  { key: 'schlecht', label: 'poor', colour: '#ef4444' },
 ];
 
-const ICONS: Record<string, string> = { ski: '⛷', schneeschuh: '❄', alpwanderung: '🥾', hochtour: '⛏', klettertour: '🧗', klettersteig: '🪜', eisklettern: '🧊', bike: '🚲' };
-const VERDICTS: Record<string, string> = { ausgezeichnet: 'excellent', gut: 'good', machbar: 'doable', schlecht: 'poor' };
+const SNOW_SYMS = new Set(['ski', 'schneeschuh', 'eisklettern', 'langlauf', 'freeride']);
+const HIKING_SYMS = new Set(['alpwanderung', 'wanderung', 'bike']);
+
+const ICONS: Record<string, string> = { ski: '⛷️', schneeschuh: '❄️', alpwanderung: '🥾', hochtour: '⛏️', klettertour: '🧗', klettersteig: '🪜', eisklettern: '🧊', bike: '🚲' };
+const VERDICT_BY_KEY = new Map(REPORT_VERDICTS.map((v) => [v.key, v]));
 
 const escapeHtml = (s: unknown) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
@@ -55,7 +72,55 @@ export function ageInDays(date: string, now = new Date()): number {
   return Math.max(0, Math.round((Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) - Date.UTC(year, month - 1, day)) / DAY));
 }
 
-export const ageColour = (days: number): string => REPORT_AGES.find((age) => days <= age.upTo)!.colour;
+/** Activity colour family for a gipfelbuch `sym` code. */
+export function reportTheme(sym: string): ReportTheme {
+  const key = sym.trim().toLowerCase();
+  if (SNOW_SYMS.has(key)) return 'snow';
+  if (HIKING_SYMS.has(key)) return 'hiking';
+  return 'climbing';
+}
+
+/** Pin fill colour for an activity `sym` and report age in days. */
+export function pinColour(sym: string, days: number): string {
+  const step = AGE_STEPS.findIndex((upTo) => days <= upTo);
+  return REPORT_THEMES[reportTheme(sym)].colours[step === -1 ? AGE_STEPS.length - 1 : step];
+}
+
+/** Text/glyph colour keeping monochrome symbols legible on pale older pins. */
+export const pinForeground = (days: number): string => (days <= 3 ? '#ffffff' : '#1e293b');
+
+/** Condition label and traffic-light dot colour for a report's `verdict`, if recognized. */
+export function verdictInfo(verdict?: string): { label: string; colour: string } | null {
+  if (!verdict) return null;
+  const hit = VERDICT_BY_KEY.get(verdict.trim().toLowerCase());
+  return hit ? { label: hit.label, colour: hit.colour } : null;
+}
+
+/** Legend entry shown in the unified legend window while condition reports are switched on. */
+export function reportLegend(): Legend {
+  return {
+    title: 'Condition reports',
+    subtitle: 'Vivid = recent · pale = older',
+    entries: [],
+    rows: [
+      {
+        entries: Object.values(REPORT_THEMES).map((theme) => ({
+          color: `linear-gradient(90deg,${theme.colours[0]},${theme.colours[2]},${theme.colours[4]})`,
+          label: theme.name,
+          shape: 'pill',
+        })),
+      },
+      {
+        heading: 'Conditions dot:',
+        entries: REPORT_VERDICTS.map((v) => ({
+          color: v.colour,
+          label: v.label,
+          shape: 'dot',
+        })),
+      },
+    ],
+  };
+}
 
 const ageText = (days: number): string => (days === 0 ? 'today' : days === 1 ? 'yesterday' : `${days} days ago`);
 
@@ -121,10 +186,15 @@ export class Gipfelbuch {
     for (const reports of groups) {
       const newest = reports[0]; // the list is stored newest first
       const age = ageInDays(newest.date);
-      const element = h('button', { type: 'button', class: 'report-pin', title: `${newest.name} · ${ageText(age)}`, 'aria-label': `Condition report: ${newest.name}, ${ageText(age)}` }, ICONS[newest.sym] ?? '📝');
-      element.style.setProperty('--age', ageColour(age));
+      const verdict = verdictInfo(newest.verdict);
+      const summary = [newest.name, ageText(age), verdict ? `conditions: ${verdict.label}` : null].filter(Boolean).join(' · ');
+      const element = h('button', { type: 'button', class: 'report-pin', title: summary, 'aria-label': `Condition report: ${summary}` }, ICONS[newest.sym] ?? '📝');
+      element.style.setProperty('--pin-bg', pinColour(newest.sym, age));
+      element.style.setProperty('--pin-fg', pinForeground(age));
+      if (verdict) element.append(h('span', { class: 'report-verdict', style: `background:${verdict.colour}` }));
       if (reports.length > 1) element.append(h('span', { class: 'report-count' }, String(reports.length)));
       element.addEventListener('click', (event) => {
+        if (interaction.drawing) return;
         event.stopPropagation();
         this.open(reports);
       });
@@ -139,11 +209,24 @@ export class Gipfelbuch {
       .map((report) => {
         const age = ageInDays(report.date);
         const [year, month, day] = report.date.split('-');
-        const facts = [report.type, `${day}.${month}.${year} (${ageText(age)})`, report.verdict ? `conditions: ${VERDICTS[report.verdict] ?? report.verdict}` : null, report.author ? `by ${report.author}` : null].filter(Boolean).join(' · ');
+        const verdict = verdictInfo(report.verdict);
+        const verdictHtml = verdict
+          ? `<span class="report-verdict-inline"><i style="background:${verdict.colour}"></i>conditions: ${escapeHtml(verdict.label)}</span>`
+          : report.verdict
+            ? escapeHtml(`conditions: ${report.verdict}`)
+            : null;
+        const facts = [
+          escapeHtml(report.type),
+          escapeHtml(`${day}.${month}.${year} (${ageText(age)})`),
+          verdictHtml,
+          report.author ? escapeHtml(`by ${report.author}`) : null,
+        ]
+          .filter(Boolean)
+          .join(' · ');
         return (
-          `<div class="report"><h3><span class="report-dot" style="background:${ageColour(age)}"></span>${escapeHtml(report.name)}</h3>` +
+          `<div class="report"><h3><span class="report-dot" style="background:${pinColour(report.sym, age)}"></span>${escapeHtml(report.name)}</h3>` +
           (report.route ? `<div>${escapeHtml(report.route)}</div>` : '') +
-          `<div class="muted">${escapeHtml(facts)}</div>` +
+          `<div class="muted">${facts}</div>` +
           (report.text ? `<p class="report-text">${escapeHtml(report.text)}</p>` : '') +
           `<div class="popup-links"><a class="button" href="${SITE}${encodeURIComponent(report.ident)}" target="_blank" rel="noopener">Read on gipfelbuch.ch${report.photo ? ' (photos)' : ''}</a></div></div>`
         );

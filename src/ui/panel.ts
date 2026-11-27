@@ -10,7 +10,7 @@ import { unofficial } from '../unofficial';
 import type { RouteFilter } from '../layers/routeFilter';
 import type { RouteSpec } from '../layers/storedRoutes';
 import { routeFilterUi, type RouteFilterUi } from './routeFilterUi';
-import { REPORT_AGES, REPORT_SPANS } from '../layers/gipfelbuch';
+import { REPORT_SPANS, reportLegend } from '../layers/gipfelbuch';
 import { h, info, slider } from './dom';
 
 export interface SlfState {
@@ -130,12 +130,22 @@ export class Panel {
     else this.settingsSection?.before(block);
   }
 
-  /** Opens a section and brings it into view. */
+  /** Opens a section (and any parent section wrapping it) and brings it into view. */
   openSection(topic: string): void {
     const target = this.sections.get(topic);
     if (!target) return;
     target.open = true;
+    for (let parent = target.parentElement?.closest('details'); parent; parent = parent.parentElement?.closest('details')) {
+      (parent as HTMLDetailsElement).open = true;
+    }
     target.scrollIntoView({ block: 'nearest' });
+  }
+
+  /** Adds, updates or removes a layer's entry in the unified legend window below the menu. */
+  setLegend(key: string, legend: Legend | null): void {
+    if (legend) this.legends.set(key, legend);
+    else this.legends.delete(key);
+    this.renderLegends();
   }
 
   onPlan: () => void = () => {};
@@ -154,11 +164,7 @@ export class Panel {
     readonly terrain: TerrainState,
     private onStateChange: () => void,
   ) {
-    const onLegend = (key: string, legend: Legend | null) => {
-      if (legend) this.legends.set(key, legend);
-      else this.legends.delete(key);
-      this.renderLegends();
-    };
+    const onLegend = (key: string, legend: Legend | null) => this.setLegend(key, legend);
     slf.onLegend = onLegend;
     guru.onLegend = onLegend;
     this.build();
@@ -171,19 +177,17 @@ export class Panel {
       { class: 'panel-body' },
       h('h1', {}, '3D Terrain Viewer'),
       this.buildPresets(),
-      this.buildBase(),
-      this.buildSki(),
-      this.buildSnow(),
-      this.buildHiking(),
-      this.buildCycling(),
+      this.buildBaseAndTerrain(),
       this.buildWeather(),
-      this.buildTerrain(),
+      this.buildSnow(),
+      this.buildRoutes(),
       this.buildMore(),
       this.buildSettings(),
     );
     this.sac.onHint = (hint) => this.sacParts.forEach((part) => (part.hint.textContent = hint ?? ''));
     this.renderSac();
     this.syncSlf();
+    this.legendBox.hidden = true;
     this.root.append(toggle, body, this.legendBox);
     // Each section's header shows how many things are switched on inside it.
     body.addEventListener('change', () => window.setTimeout(() => this.countActive(), 0));
@@ -198,7 +202,7 @@ export class Panel {
   private buildWeather(): HTMLElement {
     return this.topic(
       'weather',
-      '🌤 Weather & webcams',
+      '🌤️ Weather & webcams',
       false,
       h('label', { class: 'row' }, this.weatherBox, h('span', {}, 'Towns and summits in view'), info('Lowest and highest temperature, weather and strongest wind (km/h, arrow shows where it blows to) for the day chosen at the top of the map. Model forecast from Open-Meteo; in and around Switzerland from the MeteoSwiss ICON model. Summit values are for summit height.')),
       h('label', { class: 'row' }, this.webcamBox, h('span', {}, 'Webcams'), info('Camera icons where a webcam is known; click one for a link to it. Without setup they come from OpenStreetMap (a stored copy for Switzerland and around; link only). With your own free Windy Webcams API key (Settings) they come from Windy, with a preview picture.')),
@@ -222,17 +226,31 @@ export class Panel {
   /** How many switches are on in each section, shown beside its title. */
   countActive(): void {
     for (const made of this.sections.values()) {
-      const on = [...made.querySelectorAll('input[type="checkbox"]:checked')].filter((box) => !box.closest('.check-manual')).length + made.querySelectorAll('.segmented button.on:not([data-key=""])').length + [...made.querySelectorAll('select.counted')].filter((select) => (select as HTMLSelectElement).value !== '').length;
+      const seenShared = new Set<string>();
+      const checkboxes = [...made.querySelectorAll('input[type="checkbox"]:checked')].filter((box) => {
+        if (box.closest('.check-manual')) return false;
+        const shared = (box as HTMLElement).dataset.shared;
+        if (shared) {
+          if (seenShared.has(shared)) return false;
+          seenShared.add(shared);
+        }
+        return true;
+      });
+      const on = checkboxes.length + made.querySelectorAll('.segmented button.on:not([data-key=""])').length + [...made.querySelectorAll('select.counted')].filter((select) => (select as HTMLSelectElement).value !== '').length;
       const summary = made.querySelector(':scope > summary')!;
       if (on) summary.setAttribute('data-on', String(on));
       else summary.removeAttribute('data-on');
     }
   }
 
+  private buildRoutes(): HTMLElement {
+    return this.topic('routes', '📍 Routes', false, this.buildSki(), this.buildHiking(), this.buildCycling());
+  }
+
   private buildSki(): HTMLElement {
     return this.topic(
       'ski',
-      '⛷ Ski touring & snowshoe',
+      '⛷️ Ski touring & snowshoe',
       false,
       h('div', { class: 'group-title' }, 'Routes'),
       this.sacPart('ski'),
@@ -245,7 +263,7 @@ export class Panel {
   }
 
   private buildSnow(): HTMLElement {
-    const made = this.topic('snow', '❄ Snow & avalanches', true, this.slfBox, h('div', { class: 'group-title' }, 'Avalanche terrain'), ...this.overlayRowsFor('snow'));
+    const made = this.topic('snow', '❄️ Snow & avalanches', true, this.slfBox, h('div', { class: 'group-title' }, 'Avalanche terrain'), ...this.overlayRowsFor('snow'));
     made.querySelector('summary')?.append(info('SLF data covers Switzerland. Click a region, station or avalanche on the map for details.'));
     return made;
   }
@@ -312,6 +330,7 @@ export class Panel {
   private hutRow(): HTMLElement[] {
     const box = h('input', {
       type: 'checkbox',
+      'data-shared': 'huts',
       onchange: () => {
         this.showHuts(box.checked);
         this.onHuts(box.checked);
@@ -338,6 +357,7 @@ export class Panel {
   private reportBoxes: HTMLInputElement[] = [];
   private reportSpans: HTMLSelectElement[] = [];
   private reportHints: HTMLElement[] = [];
+  private reportExtras: HTMLElement[] = [];
 
   /** Like the hut switch, this appears under several topics and the copies stay in step. */
   private reportRow(): HTMLElement[] {
@@ -345,24 +365,25 @@ export class Panel {
       this.showReports(box.checked, Number(span.value));
       this.onReports(box.checked, Number(span.value));
     };
-    const box = h('input', { type: 'checkbox', onchange: change });
+    const box = h('input', { type: 'checkbox', 'data-shared': 'reports', onchange: change });
     const span = h('select', { title: 'Show reports since', onchange: change }, ...REPORT_SPANS.map((s) => h('option', { value: String(s.days), selected: s.days === 7 }, s.name)));
     const hint = h('div', { class: 'muted' });
-    const legend = h('div', { class: 'report-legend' }, ...REPORT_AGES.map((age) => h('span', {}, h('i', { style: `background:${age.colour}` }), age.name)));
+    const extra = h('div', { class: 'row-extra report-options', hidden: true }, h('div', { class: 'row' }, h('span', { class: 'muted' }, 'Since'), span), hint);
     this.reportBoxes.push(box);
     this.reportSpans.push(span);
     this.reportHints.push(hint);
+    this.reportExtras.push(extra);
     return [
-      h('label', { class: 'row' }, box, h('span', {}, 'Condition reports (gipfelbuch.ch)'), info('Recent tour reports from gipfelbuch.ch as pins, coloured by how recent they are. Click one for a short excerpt and a link to the full report. The list is a copy stored with this site and only as fresh as its last refresh (shown below when switched on).')),
-      h('div', { class: 'row sub-option' }, h('span', { class: 'muted' }, 'Since'), span),
-      legend,
-      hint,
+      h('label', { class: 'row' }, box, h('span', {}, 'Condition reports (gipfelbuch.ch)'), info('Recent tour reports from gipfelbuch.ch. Pin colour shows the activity (blue snow, green hiking, gray climbing) and fades from vivid to very light with age; the corner dot shows reported conditions. Click a pin for an excerpt and link. The list is a stored copy and only as fresh as its last refresh (shown below when switched on).')),
+      extra,
     ];
   }
 
   showReports(on: boolean, days?: number): void {
     for (const box of this.reportBoxes) box.checked = on;
     if (days) for (const span of this.reportSpans) span.value = String(days);
+    for (const extra of this.reportExtras) extra.hidden = !on;
+    this.setLegend('reports', on ? reportLegend() : null);
     this.countActive();
   }
 
@@ -516,9 +537,9 @@ export class Panel {
     this.map.setPaintProperty('hillshade', 'hillshade-exaggeration', this.terrain.hillshade * scale);
   }
 
-  // ── Base map ──
+  // ── Base map & terrain ──
 
-  private buildBase(): HTMLElement {
+  private buildBaseAndTerrain(): HTMLElement {
     const select = h('select', { class: 'wide', onchange: () => this.pickBase(select.value) });
     select.append(h('option', { value: '' }, 'None (relief only)'));
     for (const [group, defs] of groupBy(CATALOG.filter((l) => l.role === 'base'), (l) => l.group)) {
@@ -527,7 +548,17 @@ export class Panel {
       select.append(optgroup);
     }
     this.baseSelect = select;
-    return this.topic('base', '🗺 Base map', true, select, this.baseParamBox);
+    const made = this.topic(
+      'base',
+      '🗺️ Base map & terrain',
+      true,
+      select,
+      this.baseParamBox,
+      h('div', { class: 'group-title' }, 'Terrain'),
+      ...this.buildTerrainControls(),
+    );
+    this.sections.set('terrain', made);
+    return made;
   }
 
   private pickBase(id: string): void {
@@ -724,14 +755,11 @@ export class Panel {
     this.applyWater();
   }
 
-  private buildTerrain(): HTMLElement {
+  private buildTerrainControls(): HTMLElement[] {
     const t = this.terrain;
     const exaggerationLabel = h('span', { class: 'value' }, `${t.exaggeration.toFixed(1)}×`);
     this.colorReliefBox = h('input', { type: 'checkbox', checked: t.colorRelief, onchange: () => this.setColorRelief(this.colorReliefBox.checked) });
-    return this.topic(
-      'terrain',
-      '⛰ Terrain',
-      false,
+    return [
       h('label', { class: 'row' }, h('span', {}, 'Vertical exaggeration'), exaggerationLabel),
       slider(t.exaggeration, 1, 3, 0.1, (v) => {
         t.exaggeration = v;
@@ -783,7 +811,7 @@ export class Panel {
         }),
         h('span', {}, 'Peak names'),
       ),
-    );
+    ];
   }
 
   // ── Settings ──
@@ -815,7 +843,7 @@ export class Panel {
     });
     const unofficialBox = h('input', { type: 'checkbox', checked: unofficial.enabled, onchange: () => this.setUnofficial(unofficialBox.checked) });
     return (this.settingsSection = section(
-      '⚙ Settings',
+      '⚙️ Settings',
       false,
       h('label', { class: 'row' }, unofficialBox, h('span', {}, 'Show unofficial third-party data'), info('SAC route portal lines and Skitourenguru risk ratings. This is their content, fetched live from their servers; no licence has been granted for showing it here. Off unless you switch it on in this browser.')),
       h(
@@ -835,20 +863,48 @@ export class Panel {
     ));
   }
 
-  // ── Legends ──
+  // ── Legends (grouped inside one unified window below the main menu) ──
+
+  private legendOpen = true;
 
   private renderLegends(): void {
     this.legendBox.replaceChildren();
-    for (const legend of this.legends.values()) {
-      this.legendBox.append(
-        h(
-          'div',
-          { class: 'legend' },
-          h('div', { class: 'legend-title' }, legend.title + (legend.unit ? ` (${legend.unit})` : '')),
-          legend.subtitle ? h('div', { class: 'muted' }, legend.subtitle) : null,
-          h('div', { class: 'legend-entries' }, ...legend.entries.map((e) => h('div', { class: 'legend-entry' }, h('i', { style: `background:${e.color}` }), e.label))),
-        ),
+    this.legendBox.hidden = this.legends.size === 0;
+    if (this.legends.size === 0) return;
+
+    const entryEl = (e: { color: string; label: string; shape?: 'swatch' | 'pill' | 'dot' }) =>
+      h('div', { class: 'legend-entry' }, h('i', { class: e.shape ?? 'swatch', style: `background:${e.color}` }), e.label);
+
+    const items = [...this.legends.values()].map((legend) => {
+      const rows = legend.rows
+        ? legend.rows.map((row) =>
+            h(
+              'div',
+              { class: 'legend-entries' },
+              row.heading ? h('span', { class: 'muted legend-row-heading' }, row.heading) : null,
+              ...row.entries.map(entryEl),
+            ),
+          )
+        : [h('div', { class: 'legend-entries' }, ...legend.entries.map(entryEl))];
+      return h(
+        'div',
+        { class: 'legend-item' },
+        h('div', { class: 'legend-title' }, legend.title + (legend.unit ? ` (${legend.unit})` : '')),
+        legend.subtitle ? h('div', { class: 'muted' }, legend.subtitle) : null,
+        ...rows,
       );
-    }
+    });
+
+    const win = h(
+      'details',
+      {
+        class: 'legend-window',
+        open: this.legendOpen,
+        ontoggle: (e: Event) => (this.legendOpen = (e.target as HTMLDetailsElement).open),
+      },
+      h('summary', { class: 'legend-window-header' }, 'Legend'),
+      h('div', { class: 'legend-window-body' }, ...items),
+    );
+    this.legendBox.append(win);
   }
 }

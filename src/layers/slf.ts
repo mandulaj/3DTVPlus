@@ -35,11 +35,20 @@ export interface DangerSampler {
   } | null;
 }
 
+export interface LegendEntry {
+  color: string;
+  label: string;
+  /** Optional swatch shape: default square; 'pill' for gradient ramps, 'dot' for status dots. */
+  shape?: 'swatch' | 'pill' | 'dot';
+}
+
 export interface Legend {
   title: string;
   subtitle?: string;
   unit?: string;
-  entries: { color: string; label: string }[];
+  entries: LegendEntry[];
+  /** Optional grouped rows for multi-part legends (e.g. activity colours + condition dots). */
+  rows?: { heading?: string; entries: LegendEntry[] }[];
 }
 
 export const SNOW_PRODUCTS = {

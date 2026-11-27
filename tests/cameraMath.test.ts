@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ahead, orbit, type Place } from '../src/cameraMath';
+import { ahead, googleEarthUrl, googleMapsDirectionsUrl, orbit, type Place } from '../src/cameraMath';
 
 const RAD = Math.PI / 180;
 const M = 40075016.686 / 360;
@@ -42,5 +42,37 @@ describe('ahead', () => {
     expect(distance(moved, eye)).toBeCloseTo(1000, 0);
     expect(moved.lng).toBeGreaterThan(eye.lng);
     expect(moved.lat).toBeCloseTo(eye.lat, 9);
+  });
+});
+
+describe('external map URLs', () => {
+  it('builds a Google Maps directions URL for the clicked destination', () => {
+    expect(googleMapsDirectionsUrl(46.8850564, 8.8639351)).toBe(
+      'https://www.google.com/maps/dir/?api=1&destination=46.885056,8.863935',
+    );
+  });
+
+  it('builds a Google Earth URL matching the 3D camera view', () => {
+    const url = googleEarthUrl({
+      lat: 46.885056,
+      lng: 8.863935,
+      altitude: 2389.2,
+      zoom: 13.5,
+      bearing: -45,
+      pitch: 66.5,
+      viewportHeight: 900,
+      fov: 36.87,
+    });
+    expect(url).toMatch(/^https:\/\/earth\.google\.com\/web\/@46\.885056,8\.863935,2389\.2a,\d+\.\dd,35y,315\.00h,66\.50t,0r$/);
+  });
+
+  it('halves Google Earth slant distance per zoom level and clamps tilt/altitude', () => {
+    const base = { lat: 46.5, lng: 8.0, altitude: Number.NaN, zoom: 12, bearing: 400, pitch: 95, viewportHeight: 800, fov: 35 };
+    const z12 = googleEarthUrl(base);
+    const z13 = googleEarthUrl({ ...base, zoom: 13 });
+    const dist = (u: string) => Number(/,([\d.]+)d,/.exec(u)![1]);
+    expect(dist(z12) / dist(z13)).toBeCloseTo(2, 3);
+    expect(z12).toContain(',0.0a,');
+    expect(z12).toContain(',40.00h,89.00t,0r');
   });
 });

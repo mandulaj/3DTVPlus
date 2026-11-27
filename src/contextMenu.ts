@@ -1,5 +1,6 @@
 // Right-click on the map: what is here (coordinates, height, place) and what to do from here.
 import type * as maplibregl from 'maplibre-gl';
+import { googleEarthUrl, googleMapsDirectionsUrl } from './cameraMath';
 import { elevations } from './elevation';
 import { interaction } from './interaction';
 import { vectorLayers } from './map';
@@ -87,6 +88,8 @@ export function enableContextMenu(map: maplibregl.Map, popup: maplibregl.Popup, 
           `<button type="button" data-context="route">${planner.isOpen && planner.hasRoute ? 'Add to route' : 'Start route here'}</button>` +
           `<button type="button" data-context="view">View from here</button>` +
           `<button type="button" data-context="weather">Weather here</button>` +
+          `<a class="button" href="${googleMapsDirectionsUrl(lat, lng)}" target="_blank" rel="noopener">Directions (Google Maps)</a>` +
+          `<button type="button" data-context="earth">View in Google Earth</button>` +
           `<button type="button" data-context="copy">Copy coordinates</button></div></div>`,
       )
       .addTo(map);
@@ -150,6 +153,22 @@ export function enableContextMenu(map: maplibregl.Map, popup: maplibregl.Popup, 
         const name = popup.getElement()?.querySelector('[data-field="place"]')?.textContent || 'Location';
         popup.remove();
         onWeather({ key: `${lng.toFixed(3)},${lat.toFixed(3)}`, name: name === 'Location' ? `${lat.toFixed(3)}°N ${lng.toFixed(3)}°E` : name, at: [lng, lat] });
+        break;
+      }
+      case 'earth': {
+        const center = map.getCenter();
+        const exaggeration = map.getTerrain()?.exaggeration ?? 1;
+        const url = googleEarthUrl({
+          lat: center.lat,
+          lng: center.lng,
+          altitude: map.getCenterElevation() / exaggeration,
+          zoom: map.getZoom(),
+          bearing: map.getBearing(),
+          pitch: map.getPitch(),
+          viewportHeight: map.getCanvas().clientHeight,
+          fov: map.getVerticalFieldOfView(),
+        });
+        window.open(url, '_blank', 'noopener');
         break;
       }
       case 'copy': {

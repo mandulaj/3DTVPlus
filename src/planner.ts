@@ -247,7 +247,7 @@ export class Planner {
         button('✓ Done', 'Finish adding points (Enter or double-click)', () => this.finish(), 'drawing-only'),
         button('↶', 'Undo (Ctrl+Z)', () => this.undo()),
         button('↷', 'Redo (Ctrl+Y)', () => this.redo()),
-        button('Reverse', 'Swap start and finish', () => this.reverse()),
+        button('Reverse', 'Swap start and finish', () => this.reverse(), 'always'),
         button('Clear', 'Remove all points', () => this.clear()),
         button('Save', 'Add this route to the track list (kept after reload); later changes are saved to it', () => this.save(), 'edit unlinked'),
         button('Copy', 'Save a separate copy to the track list; you keep editing this track', () => this.copy(), 'edit linked'),
@@ -775,10 +775,16 @@ export class Planner {
   }
 
   private reverse(): void {
-    this.checkpoint();
+    if (this.points.length < 2) return;
+    if (!this.readonly) this.checkpoint();
     this.points.reverse();
     this.legs.reverse();
     for (const leg of this.legs) leg.coords.reverse();
+    if (this.recorded) {
+      // Keep recorded heights aligned with the reversed line; drop timestamps since time does not run backwards.
+      const ele = this.recorded.ele?.slice().reverse();
+      this.recorded = ele ? { ele, time: null } : null;
+    }
     this.changed();
   }
 

@@ -1,7 +1,9 @@
 // Camera geometry that does not need the map: turning the camera around a fixed point on the ground.
 
 const RAD = Math.PI / 180;
-const METRES_PER_DEGREE = 40075016.686 / 360;
+const EARTH_CIRCUMFERENCE = 40075016.686;
+const METRES_PER_DEGREE = EARTH_CIRCUMFERENCE / 360;
+const EARTH_FOV = 35;
 
 export interface Place {
   lng: number;
@@ -45,4 +47,35 @@ export function ahead(from: Place, bearing: number, metres: number): Place {
     lat: from.lat + (metres * Math.cos(bearing * RAD)) / METRES_PER_DEGREE,
     altitude: from.altitude,
   };
+}
+
+export interface EarthView {
+  lat: number;
+  lng: number;
+  /** Target terrain elevation in real (un-exaggerated) metres above sea level. */
+  altitude: number;
+  zoom: number;
+  bearing: number;
+  pitch: number;
+  viewportHeight: number;
+  /** Vertical field of view in degrees (MapLibre default ~36.87°). */
+  fov: number;
+}
+
+/** Google Maps directions URL plotting `(lat, lng)` as the destination. */
+export function googleMapsDirectionsUrl(lat: number, lng: number): string {
+  return `https://www.google.com/maps/dir/?api=1&destination=${lat.toFixed(6)},${lng.toFixed(6)}`;
+}
+
+/** Google Earth Web URL matched to a MapLibre 3D camera view. */
+export function googleEarthUrl(view: EarthView): string {
+  const fov = Math.max(5, Math.min(120, view.fov || EARTH_FOV));
+  const focalLength = Math.max(1, view.viewportHeight) / 2 / Math.tan((fov * RAD) / 2);
+  const maplibreDistance = (focalLength * EARTH_CIRCUMFERENCE * Math.cos(view.lat * RAD)) / (512 * 2 ** view.zoom);
+  // Adjust slant distance so Google Earth's 35° vertical FOV matches MapLibre's vertical framing.
+  const distance = Math.max(10, (maplibreDistance * Math.tan((fov * RAD) / 2)) / Math.tan((EARTH_FOV * RAD) / 2));
+  const altitude = Number.isFinite(view.altitude) ? view.altitude : 0;
+  const heading = ((view.bearing % 360) + 360) % 360;
+  const tilt = Math.min(89, Math.max(0, view.pitch));
+  return `https://earth.google.com/web/@${view.lat.toFixed(6)},${view.lng.toFixed(6)},${altitude.toFixed(1)}a,${distance.toFixed(1)}d,${EARTH_FOV}y,${heading.toFixed(2)}h,${tilt.toFixed(2)}t,0r`;
 }

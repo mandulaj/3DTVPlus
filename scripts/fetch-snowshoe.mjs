@@ -50,9 +50,13 @@ for (const row of db.prepare('select * from snowshoe_routes_2056').all()) {
     time: row.ascent_time_label ?? null,
     url: row.url_sac_en ?? null,
   };
-  const name = cellOf(parts[0][0][0], parts[0][0][1]);
-  if (!cells.has(name)) cells.set(name, []);
-  cells.get(name).push({ type: 'Feature', id: properties.id, properties, geometry: { type: 'MultiLineString', coordinates: parts } });
+  const feature = { type: 'Feature', id: properties.id, properties, geometry: { type: 'MultiLineString', coordinates: parts } };
+  const touched = new Set();
+  for (const part of parts) for (const [lng, lat] of part) touched.add(cellOf(lng, lat));
+  for (const name of touched) {
+    if (!cells.has(name)) cells.set(name, []);
+    cells.get(name).push(feature);
+  }
   count++;
 }
 db.close();

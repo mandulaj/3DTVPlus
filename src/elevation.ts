@@ -37,7 +37,7 @@ function loadTile(z: number, x: number, y: number): Promise<Tile> {
   const hit = cache.get(key);
   if (hit) return hit;
   const promise = (async (): Promise<Tile> => {
-    const response = await fetch(DEM_TILES.replace('{z}', String(z)).replace('{x}', String(x)).replace('{y}', String(y)));
+    const response = await fetch(DEM_TILES.replace('{z}', String(z)).replace('{x}', String(x)).replace('{y}', String(y)), { signal: AbortSignal.timeout(15000) });
     if (response.status === 404 || response.status === 204) return null;
     if (!response.ok) throw new Error(`Elevation data: HTTP ${response.status}`);
     const px = await decode(response);

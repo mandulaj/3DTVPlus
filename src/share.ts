@@ -55,16 +55,46 @@ function unpack(bytes: Uint8Array): Point[] {
   for (let i = 0; i < count; i++) {
     x += varint();
     y += varint();
-    coords.push([x / PRECISION, y / PRECISION]);
+    const lng = x / PRECISION;
+    const lat = y / PRECISION;
+    if (!Number.isFinite(lng) || !Number.isFinite(lat) || Math.abs(lng) > 180 || Math.abs(lat) > 90) throw new Error('track coordinates out of range');
+    coords.push([lng, lat]);
   }
   return coords;
 }
 
+const MAX_PIPE_BYTES = 2 * 1024 * 1024; // guard against decompression bombs
+
 async function pipe(bytes: Uint8Array, stream: CompressionStream | DecompressionStream): Promise<Uint8Array> {
   const writer = stream.writable.getWriter();
-  void writer.write(bytes as Uint8Array<ArrayBuffer>);
-  void writer.close();
-  return new Uint8Array(await new Response(stream.readable).arrayBuffer());
+  const writing = writer
+    .write(bytes as Uint8Array<ArrayBuffer>)
+    .then(() => writer.close())
+    .catch(() => {});
+  const reader = stream.readable.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > MAX_PIPE_BYTES) {
+        await reader.cancel().catch(() => {});
+        throw new Error('shared data is too large');
+      }
+      chunks.push(value);
+    }
+  } finally {
+    await writing;
+  }
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out;
 }
 
 function toBase64Url(bytes: Uint8Array): string {
@@ -114,7 +144,10 @@ export async function decodeTrack(text: string): Promise<Point[]> {
   const version = bytes[0];
   const payload = bytes.subarray(1);
   if (version === 0) return unpack(payload);
-  if (version === 1) return unpack(await pipe(payload, new DecompressionStream('deflate-raw')));
+  if (version === 1) {
+    if (typeof DecompressionStream === 'undefined') throw new Error('this browser cannot unpack compressed links');
+    return unpack(await pipe(payload, new DecompressionStream('deflate-raw')));
+  }
   throw new Error('this link was made by a newer version of the viewer');
 }
 
@@ -159,8 +192,11 @@ export async function decodeShare(text: string): Promise<SharedView> {
   const bytes = fromBase64Url(text);
   const version = bytes[0];
   if (version !== 2 && version !== 3) throw new Error('this link was made by a newer version of the viewer');
+  if (version === 3 && typeof DecompressionStream === 'undefined') throw new Error('this browser cannot unpack compressed links');
   const raw = version === 3 ? await pipe(bytes.subarray(1), new DecompressionStream('deflate-raw')) : bytes.subarray(1);
+  if (raw.length < 2) throw new Error('incomplete shared link');
   const length = (raw[0] << 8) | raw[1];
+  if (raw.length < 2 + length) throw new Error('incomplete shared link');
   const header = JSON.parse(new TextDecoder().decode(raw.subarray(2, 2 + length)));
   const rest = raw.subarray(2 + length);
   return { hash: String(header.h ?? ''), name: String(header.n ?? ''), coords: rest.length ? unpack(rest) : null };

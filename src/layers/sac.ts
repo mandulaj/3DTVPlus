@@ -121,7 +121,9 @@ export class SacRoutes {
     for (let i = 0; i < needGrade.length; i += 150) {
       const ids = needGrade.slice(i, i + 150);
       try {
-        const data = await fetch(`${API}/route/search?lang=en&output_lang=en&limit=200&id=${ids.join(',')}`).then((r) => r.json());
+        const response = await fetch(`${API}/route/search?lang=en&output_lang=en&limit=200&id=${ids.join(',')}`, { signal: AbortSignal.timeout(15000) });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
         for (const route of (data.results ?? []) as { id: number; main_difficulty?: string }[]) this.grades.set(Number(route.id), route.main_difficulty ?? null);
         for (const id of ids) if (!this.grades.has(id)) this.grades.set(id, null);
       } catch {
@@ -170,11 +172,11 @@ export class SacRoutes {
     const colour = ['match', ['get', 'type'], ...Object.entries(SAC_DISCIPLINES).flatMap(([id, d]) => [id, d.colour]), '#777777'] as never;
     const width = ['interpolate', ['linear'], ['zoom'], 10, 1.5, 14, 3.5] as never;
     const line = { type: 'line' as const, source: SOURCE, minzoom: MIN_ZOOM, layout: { 'line-cap': 'round' as const, 'line-join': 'round' as const } };
-    this.map.addLayer({ ...line, id: LINE_LAYERS[0], paint: { 'line-color': '#ffffff', 'line-opacity': 0.75, 'line-width': ['interpolate', ['linear'], ['zoom'], 10, 3, 14, 6.5] } }, SLOT.top);
+    this.map.addLayer({ ...line, id: LINE_LAYERS[0], paint: { 'line-color': '#ffffff', 'line-opacity': 0.75, 'line-width': ['interpolate', ['linear'], ['zoom'], 10, 3, 14, 6.5] } }, SLOT.line);
     // Variants of a route are drawn lighter than its main line.
     const opacity = ['case', ['get', 'alternative'], 0.6, 1] as never;
-    this.map.addLayer({ ...line, id: LINE_LAYERS[1], paint: { 'line-color': colour, 'line-width': width, 'line-opacity': opacity } }, SLOT.top);
-    this.map.addLayer({ ...line, id: LINE_LAYERS[2], layout: { 'line-join': 'round' }, paint: { 'line-color': colour, 'line-width': width, 'line-opacity': opacity, 'line-dasharray': [2, 2] } }, SLOT.top);
+    this.map.addLayer({ ...line, id: LINE_LAYERS[1], paint: { 'line-color': colour, 'line-width': width, 'line-opacity': opacity } }, SLOT.line);
+    this.map.addLayer({ ...line, id: LINE_LAYERS[2], layout: { 'line-join': 'round' }, paint: { 'line-color': colour, 'line-width': width, 'line-opacity': opacity, 'line-dasharray': [2, 2] } }, SLOT.line);
     this.map.addLayer(
       {
         id: POINTS,
@@ -183,12 +185,12 @@ export class SacRoutes {
         minzoom: MIN_ZOOM,
         paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 10, 4, 14, 7], 'circle-color': SAC_DISCIPLINES.climbing.colour, 'circle-stroke-color': '#ffffff', 'circle-stroke-width': 1.5 },
       },
-      SLOT.top,
+      SLOT.point,
     );
     this.map.addSource(HIGHLIGHT, { type: 'geojson', data: empty });
     this.map.addLayer(
       { id: HIGHLIGHT, type: 'line', source: HIGHLIGHT, layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#00d5ff', 'line-width': ['interpolate', ['linear'], ['zoom'], 10, 10, 14, 18], 'line-opacity': 0.9 } }, // a wide glow under the route's own line
-      LINE_LAYERS[0],
+      SLOT.lineHighlight,
     );
     this.popup.on('close', () => this.highlight([]));
     this.applyFilter();
@@ -281,13 +283,15 @@ export class SacRoutes {
     return promise;
   }
 
+  private clickToken = 0;
+  private clickAbort: AbortController | null = null;
+
   private bind(): void {
     if (this.bound) return;
     this.bound = true;
-    const hover = (on: boolean) => () => (this.map.getCanvas().style.cursor = on ? 'pointer' : '');
     for (const id of [LINE_LAYERS[0], POINTS]) {
-      this.map.on('mouseenter', id, hover(true));
-      this.map.on('mouseleave', id, hover(false));
+      this.map.on('mouseenter', id, () => interaction.setHover(this.map, id, true));
+      this.map.on('mouseleave', id, () => interaction.setHover(this.map, id, false));
     }
 
     this.map.on('click', async (event) => {
@@ -295,12 +299,19 @@ export class SacRoutes {
       const { x, y } = event.point;
       const hits = this.map.queryRenderedFeatures([[x - 6, y - 6], [x + 6, y + 6]], { layers: [LINE_LAYERS[0], POINTS] });
       if (!hits.length) return;
+      const token = ++this.clickToken;
+      this.clickAbort?.abort();
+      const controller = (this.clickAbort = new AbortController());
+      const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]);
       const point = hits.find((f) => f.layer.id === POINTS);
-      if (point) return this.showPoi(event.lngLat, Number(point.properties.id));
+      if (point) return this.showPoi(event.lngLat, Number(point.properties.id), token, signal);
       const ids = [...new Set(hits.map((f) => Number(f.properties.route_id)))].slice(0, 8);
       this.popup.setLngLat(event.lngLat).setHTML('<div class="popup muted">Loading route…</div>').addTo(this.map);
       try {
-        const data = await fetch(`${API}/route/search?lang=en&output_lang=en&id=${ids.join(',')}`).then((r) => r.json());
+        const response = await fetch(`${API}/route/search?lang=en&output_lang=en&id=${ids.join(',')}`, { signal });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        if (token !== this.clickToken) return;
         const rows = ((data.results ?? []) as any[]).map((route) => {
           const discipline = SAC_DISCIPLINES[route.type as SacDiscipline];
           const destination = [text(route.destination_poi?.display_name), route.destination_poi?.altitude && `${Math.round(route.destination_poi.altitude)} m`].filter(Boolean).join(', ');
@@ -337,7 +348,8 @@ export class SacRoutes {
           });
         }
         void this.measure(ids);
-      } catch {
+      } catch (err) {
+        if (token !== this.clickToken || (err as Error).name === 'AbortError') return;
         this.popup.setHTML('<div class="popup">Route details could not be loaded.</div>');
       }
     });
@@ -366,14 +378,17 @@ export class SacRoutes {
     }
   }
 
-  private async showPoi(lngLat: maplibregl.LngLat, id: number): Promise<void> {
+  private async showPoi(lngLat: maplibregl.LngLat, id: number, token: number, signal: AbortSignal): Promise<void> {
     const link = `${PORTAL}/${id}/`;
     const body = (name: string) =>
       `<div class="popup"><h3>${escapeHtml(name)}</h3><span class="danger-chip" style="background:${SAC_DISCIPLINES.climbing.colour};color:#fff">Climbing</span>` +
       `<div class="popup-links"><a href="${link}" target="_blank" rel="noopener">Open in SAC route portal</a></div><div class="muted">Source: SAC route portal</div></div>`;
     this.popup.setLngLat(lngLat).setHTML(body('Climbing area')).addTo(this.map);
     try {
-      const data = await fetch(`${API}/poi/search?lang=en&output_lang=en&id=${id}`).then((r) => r.json());
+      const response = await fetch(`${API}/poi/search?lang=en&output_lang=en&id=${id}`, { signal });
+      if (!response.ok) return;
+      const data = await response.json();
+      if (token !== this.clickToken) return;
       const poi = data.results?.[0];
       if (poi) this.popup.setHTML(body([text(poi.display_name), poi.altitude && `${Math.round(poi.altitude)} m`].filter(Boolean).join(', ')));
     } catch {

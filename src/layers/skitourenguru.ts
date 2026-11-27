@@ -72,7 +72,7 @@ export class Skitourenguru {
             'circle-opacity': ['case', ['<', ['get', 'risk'], 0], 0.55, 1],
           },
         },
-        SLOT.top,
+        SLOT.point,
       );
       this.bind();
 
@@ -121,7 +121,7 @@ export class Skitourenguru {
         )
         .addTo(this.map);
     });
-    this.map.on('mouseenter', ID, () => (this.map.getCanvas().style.cursor = 'pointer'));
-    this.map.on('mouseleave', ID, () => (this.map.getCanvas().style.cursor = ''));
+    this.map.on('mouseenter', ID, () => interaction.setHover(this.map, ID, true));
+    this.map.on('mouseleave', ID, () => interaction.setHover(this.map, ID, false));
   }
 }

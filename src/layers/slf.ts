@@ -242,7 +242,10 @@ export class SlfLayers {
     const day = date || (spec.supportsCurrent ? 'current' : new Date().toISOString().slice(0, 10));
     try {
       const [scale, response] = await Promise.all([
-        fetch(`${spec.host}/colorscale`).then((r) => r.json() as Promise<ColorScale>),
+        fetch(`${spec.host}/colorscale`).then((r) => {
+          if (!r.ok) throw new Error(`${spec.name} colour scale: HTTP ${r.status}`);
+          return r.json() as Promise<ColorScale>;
+        }),
         fetch(`${spec.host}/${spec.code}/${day}/encoded`),
       ]);
       if (!response.ok) {
@@ -407,17 +410,24 @@ export class SlfLayers {
       .slice(0, count);
   }
 
+  private bulletinToken = 0;
+  private bulletinAbort: AbortController | null = null;
+
   async setBulletin(on: boolean, opacity = 0.45): Promise<void> {
+    const token = ++this.bulletinToken;
+    this.bulletinAbort?.abort();
+    this.bulletinAbort = null;
     this.removeLayerAndSource('slf-bulletin', ['slf-bulletin-line']);
     // The regions stay available after the layer is switched off (for a route profile coloured by them).
     this.onLegend('bulletin', null);
     if (!on) return;
+    const controller = (this.bulletinAbort = new AbortController());
     try {
-      const data = await fetch('https://aws.slf.ch/api/bulletin/caaml/en/geojson').then((r) => {
+      const data = await fetch('https://aws.slf.ch/api/bulletin/caaml/en/geojson', { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]) }).then((r) => {
         if (!r.ok) throw new Error(`Avalanche bulletin: HTTP ${r.status}`);
         return r.json();
       });
-      if (this.map.getSource('slf-bulletin')) return;
+      if (token !== this.bulletinToken || this.map.getSource('slf-bulletin')) return;
       this.bulletinRegions = regionsOf(data);
       this.onBulletinChange();
       const withRating = data.features.find((f: any) => f.properties?.validTime);
@@ -429,11 +439,11 @@ export class SlfLayers {
           source: 'slf-bulletin',
           paint: { 'fill-color': ['coalesce', ['get', 'fill'], 'rgba(0,0,0,0)'], 'fill-opacity': opacity },
         },
-        SLOT.top,
+        SLOT.area,
       );
       this.map.addLayer(
         { id: 'slf-bulletin-line', type: 'line', source: 'slf-bulletin', paint: { 'line-color': '#333', 'line-width': 0.7, 'line-opacity': 0.6 } },
-        SLOT.top,
+        SLOT.area,
       );
       this.bindPopup('slf-bulletin', (f) => this.bulletinHtml(parseProps(f)));
       const valid = withRating?.properties.validTime;
@@ -443,6 +453,7 @@ export class SlfLayers {
         entries: Object.entries(DANGER).map(([name, d]) => ({ color: d.color, label: `${d.level} ${pretty(name)}` })),
       });
     } catch (err) {
+      if (token !== this.bulletinToken || (err as Error).name === 'AbortError') return;
       this.onError((err as Error).message);
     }
   }
@@ -461,7 +472,7 @@ export class SlfLayers {
             const d = DANGER[r.mainValue];
             const sub = SUBDIVISION[r.customData?.CH?.subdivision] ?? '';
             const period = r.validTimePeriod && r.validTimePeriod !== 'all_day' ? ` (${pretty(r.validTimePeriod)})` : '';
-            return `<span class="danger-chip" style="background:${d?.color ?? '#ccc'}">${d?.level ?? '?'}${sub} ${escapeHtml(pretty(r.mainValue))}${period}</span>`;
+            return `<span class="danger-chip" style="background:${d?.color ?? '#ccc'}">${d?.level ?? '?'}${sub} ${escapeHtml(pretty(r.mainValue))}${escapeHtml(period)}</span>`;
           })
           .join(' ')
       : '<i>No danger rating issued</i>';
@@ -512,22 +523,30 @@ export class SlfLayers {
 
   // ───────────── Stations ─────────────
 
+  private stationsToken = 0;
+  private stationsAbort: AbortController | null = null;
+
   async setStations(type: StationType | null): Promise<void> {
+    const token = ++this.stationsToken;
+    this.stationsAbort?.abort();
+    this.stationsAbort = null;
     this.removeLayerAndSource('slf-stations', ['slf-stations-label']);
     this.onLegend('stations', null);
     if (!type) return;
     const spec = STATION_TYPES[type];
+    const controller = (this.stationsAbort = new AbortController());
+    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]);
     try {
       const base = 'https://public-meas-data-v2.slf.ch/public';
       const filter = type === 'WIND_MEAN' ? '?stationTypeFilter=WIND' : '';
       const [data, scale] = await Promise.all([
-        fetch(`${base}/station-data/timepoint/${type}/current/geojson${filter}`).then((r) => {
+        fetch(`${base}/station-data/timepoint/${type}/current/geojson${filter}`, { signal }).then((r) => {
           if (!r.ok) throw new Error(`SLF stations: HTTP ${r.status}`);
           return r.json();
         }),
-        fetch(`${base}/map/colorscale/${type}`).then((r) => (r.ok ? (r.json() as Promise<ColorScale>) : null)).catch(() => null),
+        fetch(`${base}/map/colorscale/${type}`, { signal }).then((r) => (r.ok ? (r.json() as Promise<ColorScale>) : null)).catch(() => null),
       ]);
-      if (this.map.getSource('slf-stations')) return;
+      if (token !== this.stationsToken || this.map.getSource('slf-stations')) return;
       this.stationUnit = scale?.unit ?? spec.unit;
       data.features = data.features.filter((f: any) => f.properties.value !== null);
       for (const f of data.features) f.properties.text = String(Math.round(f.properties.value));
@@ -546,7 +565,7 @@ export class SlfLayers {
             'circle-stroke-width': 1,
           },
         },
-        SLOT.top,
+        SLOT.point,
       );
       this.map.addLayer(
         {
@@ -556,7 +575,7 @@ export class SlfLayers {
           minzoom: 8.5,
           layout: { 'icon-image': ['concat', 'lbl:', ['get', 'text']], 'icon-anchor': 'bottom', 'icon-offset': [0, -8], 'icon-padding': 1 },
         },
-        SLOT.top,
+        SLOT.point,
       );
       this.bindPopup('slf-stations', (f) => {
         const p = parseProps(f);
@@ -575,6 +594,7 @@ export class SlfLayers {
         });
       }
     } catch (err) {
+      if (token !== this.stationsToken || (err as Error).name === 'AbortError') return;
       this.onError((err as Error).message);
     }
   }
@@ -606,15 +626,22 @@ export class SlfLayers {
 
   // ───────────── Recent avalanches ─────────────
 
+  private avalanchesToken = 0;
+  private avalanchesAbort: AbortController | null = null;
+
   async setAvalanches(on: boolean): Promise<void> {
+    const token = ++this.avalanchesToken;
+    this.avalanchesAbort?.abort();
+    this.avalanchesAbort = null;
     this.removeLayerAndSource('slf-avalanches');
     if (!on) return;
+    const controller = (this.avalanchesAbort = new AbortController());
     try {
-      const data = await fetch('https://whiterisk.ch/api/current-avalanches').then((r) => {
+      const data = await fetch('https://whiterisk.ch/api/current-avalanches', { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]) }).then((r) => {
         if (!r.ok) throw new Error(`Recent avalanches: HTTP ${r.status}`);
         return r.json();
       });
-      if (this.map.getSource('slf-avalanches')) return;
+      if (token !== this.avalanchesToken || this.map.getSource('slf-avalanches')) return;
       this.map.addSource('slf-avalanches', { type: 'geojson', data, attribution: `${SLF_ATTRIBUTION} / White Risk` });
       this.map.addLayer(
         {
@@ -628,7 +655,7 @@ export class SlfLayers {
             'circle-stroke-width': 1.5,
           },
         },
-        SLOT.top,
+        SLOT.point,
       );
       this.bindPopup('slf-avalanches', (f) => {
         const p = parseProps(f);
@@ -643,6 +670,7 @@ export class SlfLayers {
         return `<div class="popup"><h3>Avalanche</h3><table>${rows.map(([k, v]) => `<tr><td class="muted">${k}</td><td>${escapeHtml(v)}</td></tr>`).join('')}</table></div>`;
       });
     } catch (err) {
+      if (token !== this.avalanchesToken || (err as Error).name === 'AbortError') return;
       this.onError((err as Error).message);
     }
   }
@@ -657,15 +685,19 @@ export class SlfLayers {
     this.map.on('click', layerId, (e) => {
       const feature = e.features?.[0];
       if (!feature || interaction.drawing) return;
-      // Points on top win over the bulletin polygon underneath.
+      // Points and route lines on top win over the bulletin polygon underneath.
       if (layerId === 'slf-bulletin') {
-        const pointLayers = ['slf-stations', 'slf-avalanches', 'guru-routes'].filter((id) => this.map.getLayer(id));
-        if (pointLayers.length && this.map.queryRenderedFeatures(e.point, { layers: pointLayers }).length) return;
+        const higher = this.map
+          .getStyle()
+          .layers.map((l) => l.id)
+          .filter((id) => ['slf-stations', 'slf-avalanches', 'guru-routes', 'sac-routes-casing', 'sac-climbing'].includes(id) || /^routes-.*-(casing|point)$/.test(id));
+        const { x, y } = e.point;
+        if (higher.length && this.map.queryRenderedFeatures([[x - 5, y - 5], [x + 5, y + 5]], { layers: higher }).length) return;
       }
       this.popup.setLngLat(e.lngLat).setHTML(html(feature)).addTo(this.map);
     });
-    this.map.on('mouseenter', layerId, () => (this.map.getCanvas().style.cursor = 'pointer'));
-    this.map.on('mouseleave', layerId, () => (this.map.getCanvas().style.cursor = ''));
+    this.map.on('mouseenter', layerId, () => interaction.setHover(this.map, layerId, true));
+    this.map.on('mouseleave', layerId, () => interaction.setHover(this.map, layerId, false));
   }
 
   private removeLayerAndSource(id: string, extraLayers: string[] = []): void {

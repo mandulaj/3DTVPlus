@@ -116,7 +116,7 @@ export class TerrainCheck {
   private startDrawing(): void {
     if (this.busy || interaction.drawing) return;
     this.drawing = true;
-    interaction.drawing = true; // clicks belong to this tool now, not to popups
+    interaction.setMode('draw-area'); // clicks belong to this tool now, not to popups
     this.outline = [];
     this.map.doubleClickZoom.disable();
     this.map.getCanvas().style.cursor = 'crosshair';
@@ -128,7 +128,7 @@ export class TerrainCheck {
   private finishDrawing(compute: boolean): void {
     if (!this.drawing) return;
     this.drawing = false;
-    interaction.drawing = false;
+    interaction.setMode('explore');
     this.map.getCanvas().style.cursor = '';
     this.drawButton.textContent = '▱ Draw area';
     window.setTimeout(() => this.map.doubleClickZoom.enable(), 300); // after this double click
@@ -156,7 +156,14 @@ export class TerrainCheck {
     await this.compute(null, line);
   }
 
+  private runToken = 0;
+  private worker: Worker | null = null;
+
   clear(): void {
+    this.runToken++;
+    this.worker?.terminate();
+    this.worker = null;
+    this.busy = false;
     this.finishDrawing(false);
     this.run = null;
     this.outline = [];
@@ -196,10 +203,12 @@ export class TerrainCheck {
       this.status.textContent = `Too large: ${((width * height * CELL * CELL) / 1e6).toFixed(0)} km² (at most ${((MAX_CELLS * CELL * CELL) / 1e6).toFixed(0)} km² with its surroundings). Pick a smaller area or a shorter route.`;
       return;
     }
+    const token = ++this.runToken;
     this.busy = true;
     this.status.textContent = 'Loading elevation data…';
     try {
       const heights = await heightGrid(west, south, east, north, width, height);
+      if (token !== this.runToken) return;
       const grid: Grid = { width, height, cell: CELL, heights };
       const cellAt = (p: Point): [number, number] => [((p[0] - west) / (east - west)) * width, ((north - p[1]) / (north - south)) * height];
 
@@ -236,30 +245,39 @@ export class TerrainCheck {
       }
 
       const conditions = await this.conditions(grid, west, south, east, north);
-      if (!conditions) return;
+      if (!conditions || token !== this.runToken) return;
       this.status.textContent = 'Checking terrain…';
       const result = await new Promise<Result>((resolve, reject) => {
-        const worker = new CheckWorker();
+        const worker = (this.worker = new CheckWorker());
         worker.onmessage = (event: MessageEvent<Result>) => {
           worker.terminate();
+          if (this.worker === worker) this.worker = null;
           resolve(event.data);
         };
         worker.onerror = (event) => {
           worker.terminate();
+          if (this.worker === worker) this.worker = null;
           reject(new Error(event.message || 'the check failed'));
+        };
+        worker.onmessageerror = () => {
+          worker.terminate();
+          if (this.worker === worker) this.worker = null;
+          reject(new Error('worker message error'));
         };
         const request: CheckRequest = { grid, conditions, mask };
         worker.postMessage(request);
       });
+      if (token !== this.runToken) return;
       this.run = { west, south, east, north, grid, result, route: line };
       this.paint();
       this.summarise(mask);
       this.status.textContent = this.conditionsNote;
     } catch (error) {
+      if (token !== this.runToken) return;
       this.status.textContent = '';
       toast(`Terrain check: ${(error as Error).message}`);
     } finally {
-      this.busy = false;
+      if (token === this.runToken) this.busy = false;
     }
   }
 
@@ -340,7 +358,7 @@ export class TerrainCheck {
     if (source) source.updateImage({ url, coordinates });
     else {
       this.map.addSource(SOURCE, { type: 'image', url, coordinates });
-      this.map.addLayer({ id: SOURCE, type: 'raster', source: SOURCE, paint: { 'raster-opacity': 0.8, 'raster-fade-duration': 0, 'raster-resampling': 'nearest' } }, SLOT.top);
+      this.map.addLayer({ id: SOURCE, type: 'raster', source: SOURCE, paint: { 'raster-opacity': 0.8, 'raster-fade-duration': 0, 'raster-resampling': 'nearest' } }, SLOT.area);
     }
     const swatch = (colour: readonly number[], label: string) => {
       const box = h('i', { class: 'swatch' });

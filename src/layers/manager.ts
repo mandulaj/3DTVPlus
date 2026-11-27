@@ -1,6 +1,6 @@
 import type * as maplibregl from 'maplibre-gl';
 import type { LayerSpecification, SourceSpecification, StyleSpecification } from 'maplibre-gl';
-import { SLOT } from '../map';
+import { DEFAULT_GLYPHS, SLOT } from '../map';
 import { KEY_PROVIDERS, byId, defaultParam, type KeyProvider, type LayerDef } from './catalog';
 
 const PROXY_KEY = 'terrain-viewer.corsProxy';
@@ -88,8 +88,10 @@ export class LayerManager {
       url = url.replace('{key}', encodeURIComponent(key));
     }
     if (def.needsProxy) {
-      if (this.userProxy) url = this.userProxy + url;
-      else if (await this.hasDevProxy()) url = url.replace(DEV_PROXY_HOST, DEV_PROXY);
+      if (this.userProxy) {
+        if (!/^https?:\/\//i.test(this.userProxy)) throw new Error('CORS proxy prefix must start with http:// or https://');
+        url = this.userProxy + (this.userProxy.includes('?') ? encodeURIComponent(url) : url);
+      } else if (await this.hasDevProxy()) url = url.replace(DEV_PROXY_HOST, DEV_PROXY);
       else throw new Error(`"${def.name}" needs a CORS proxy (see Settings).`);
     }
     return url;
@@ -134,7 +136,7 @@ export class LayerManager {
     for (const layerId of this.baseLayerIds) if (this.map.getLayer(layerId)) this.map.removeLayer(layerId);
     for (const sourceId of this.baseSourceIds) if (this.map.getSource(sourceId)) this.map.removeSource(sourceId);
 
-    if (prepared.style?.glyphs) this.map.setGlyphs(prepared.style.glyphs);
+    this.map.setGlyphs(prepared.style?.glyphs ?? DEFAULT_GLYPHS);
     if (prepared.style?.sprite) this.map.setSprite(prepared.style.sprite as string);
     for (const [sourceId, source] of Object.entries(prepared.sources)) this.map.addSource(sourceId, source);
     for (const layer of prepared.layers) this.map.addLayer(layer, SLOT.base);

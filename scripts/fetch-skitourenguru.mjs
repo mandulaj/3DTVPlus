@@ -90,11 +90,14 @@ function write(key, routes, extra = {}) {
   mkdirSync(dir, { recursive: true });
   const cells = new Map();
   for (const route of routes) {
-    const [lng, lat] = route.lines[0][0];
-    const name = cellOf(lng, lat);
-    if (!cells.has(name)) cells.set(name, []);
     const { lines, ...properties } = route;
-    cells.get(name).push({ type: 'Feature', id: route.id, properties, geometry: { type: 'MultiLineString', coordinates: lines } });
+    const feature = { type: 'Feature', id: route.id, properties, geometry: { type: 'MultiLineString', coordinates: lines } };
+    const touched = new Set();
+    for (const part of lines) for (const [lng, lat] of part) touched.add(cellOf(lng, lat));
+    for (const name of touched) {
+      if (!cells.has(name)) cells.set(name, []);
+      cells.get(name).push(feature);
+    }
   }
   let bytes = 0;
   for (const [name, features] of cells) {

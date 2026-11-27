@@ -113,25 +113,35 @@ export class SunControls {
     this.commit();
   }
 
+  private zoneToken = 0;
+  private zoneAbort: AbortController | null = null;
+
   /** Finds the time zone at the map centre (Open-Meteo) and shows times in it if it is not the browser's. */
   private async locateZone(): Promise<void> {
     const { lng, lat } = this.map.getCenter();
     const key = `${lat.toFixed(0)},${lng.toFixed(0)}`; // zones are large: ask again only after a real move
     if (key === this.zoneKey) return;
     this.zoneKey = key;
+    const token = ++this.zoneToken;
+    this.zoneAbort?.abort();
+    const controller = (this.zoneAbort = new AbortController());
     let found: string | null = null;
     try {
-      const response = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(1)}&longitude=${lng.toFixed(1)}&current=temperature_2m&timezone=auto`);
+      const response = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(1)}&longitude=${lng.toFixed(1)}&current=temperature_2m&timezone=auto`, {
+        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(8000)]),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const name = (await response.json()).timezone as string | undefined;
       if (name && name !== BROWSER_ZONE) {
         new Intl.DateTimeFormat('en', { timeZone: name }); // throws if this browser does not know the zone
         found = name;
       }
     } catch {
+      if (token !== this.zoneToken) return;
       found = null; // lookup unavailable: stay with the browser's zone
       this.zoneKey = '';
     }
-    if (found === zone) return;
+    if (token !== this.zoneToken || found === zone) return;
     zone = found;
     // Same instant, shown in the other zone.
     this.date.value = dateValue(this.sun.time);

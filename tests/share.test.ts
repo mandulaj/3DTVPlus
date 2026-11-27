@@ -56,6 +56,16 @@ describe('whole-view packing', () => {
   it('refuses a plain track text', async () => {
     await expect(decodeShare((await encodeTrack(windingTrack(2))).text)).rejects.toThrow();
   });
+
+  it('rejects truncated headers and out-of-range coordinates', async () => {
+    // Version 2 with header length 500 but only 3 bytes of payload
+    const badHeader = btoa(String.fromCharCode(2, 1, 244, 123)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    await expect(decodeShare(badHeader)).rejects.toThrow('incomplete shared link');
+
+    // Version 0 track with out-of-range latitude (> 90 deg)
+    const packed = await encodeTrack([[8, 95], [8.1, 95.1]]);
+    await expect(decodeTrack(packed.text)).rejects.toThrow('out of range');
+  });
 });
 
 describe('readable link name', () => {

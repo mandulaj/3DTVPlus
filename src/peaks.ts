@@ -1,6 +1,7 @@
 // Peak labels: a thin vertical marker over each summit in view with name, altitude and distance
 // from the camera. Click one to stand on that summit and look around (Shift+drag).
 import * as maplibregl from 'maplibre-gl';
+import { interaction } from './interaction';
 import { vectorLayers } from './map';
 import type { LookAround } from './lookAround';
 
@@ -126,6 +127,7 @@ export class PeakLabels {
     element.title = `View from ${peak.name}`;
     element.append(label, Object.assign(document.createElement('div'), { className: 'peak-stem' }));
     element.addEventListener('click', (event) => {
+      if (interaction.drawing) return;
       event.stopPropagation();
       const exaggeration = this.map.getTerrain()?.exaggeration ?? 1;
       this.look.flyTo(peak.lngLat, peak.ele * exaggeration + SUMMIT_EYE_HEIGHT, 82);

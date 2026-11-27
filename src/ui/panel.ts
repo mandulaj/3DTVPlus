@@ -489,11 +489,21 @@ export class Panel {
     return h('div', { class: 'section-body preset-box' }, select, h('div', { class: 'plan-row' }, plan, open));
   }
 
+  private presetToken = 0;
+
   async applyPreset(preset: Preset): Promise<void> {
+    const token = ++this.presetToken;
     await this.layers.setBase(preset.base);
+    if (token !== this.presetToken) return;
     this.syncBase();
-    for (const id of [...this.layers.overlays.keys()]) await this.layers.setOverlay(id, false);
-    for (const overlay of preset.overlays) await this.layers.setOverlay(overlay.id, true, { opacity: overlay.opacity });
+    for (const id of [...this.layers.overlays.keys()]) {
+      await this.layers.setOverlay(id, false);
+      if (token !== this.presetToken) return;
+    }
+    for (const overlay of preset.overlays) {
+      await this.layers.setOverlay(overlay.id, true, { opacity: overlay.opacity });
+      if (token !== this.presetToken) return;
+    }
     this.syncAllOverlays();
 
     const s = this.slfState;
@@ -507,13 +517,29 @@ export class Panel {
     s.guru = false;
     void this.guru.setEnabled(false);
     this.sac.setDisciplines(unofficial.enabled ? (preset.sac ?? []) : []);
+    for (const d of [...this.sac.filters.keys()]) {
+      this.sac.setFilter(d, null);
+      this.showRouteFilter(d, null);
+    }
     for (const spec of this.routes) {
       const on = preset.routes?.includes(spec.id) ?? false;
       this.showRoute(spec.id, on);
       this.onRoute(spec.id, on);
+      this.onRouteFilter(spec.id, null);
+      this.showRouteFilter(spec.id, null);
     }
     this.showHuts(Boolean(preset.huts));
     this.onHuts(Boolean(preset.huts));
+    this.showReports(false);
+    this.onReports(false, Number(this.reportSpans[0]?.value) || 7);
+    if (this.weatherBox.checked) {
+      this.weatherBox.checked = false;
+      this.onWeather(false);
+    }
+    if (this.webcamBox.checked) {
+      this.webcamBox.checked = false;
+      this.onWebcams(false);
+    }
     this.syncSac();
     void this.slf.setSnowMap(s.snow || null, undefined, s.snowOpacity);
     void this.slf.setBulletin(s.bulletin, s.bulletinOpacity);

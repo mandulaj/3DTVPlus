@@ -152,7 +152,7 @@ export class WeatherCard {
       forecast_days: '8',
     });
     if (spot.ele !== undefined) query.set('elevation', String(Math.round(spot.ele)));
-    const response = await fetch(`${API}?${query}`);
+    const response = await fetch(`${API}?${query}`, { signal: AbortSignal.timeout(12000) });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
     // The hour the current values belong to.

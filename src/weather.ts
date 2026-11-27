@@ -5,6 +5,7 @@
 // nearby the short range comes from MeteoSwiss's ICON model. This is model output for a point (for
 // summits, adjusted to the summit's height), not the edited forecast MeteoSwiss publishes itself.
 import * as maplibregl from 'maplibre-gl';
+import { interaction } from './interaction';
 import { vectorLayers } from './map';
 import { h, toast } from './ui/dom';
 
@@ -79,7 +80,9 @@ export async function meteoSwissAddress(at: [number, number]): Promise<string | 
       tolerance: '0',
       returnGeometry: 'false',
     });
-    const data = await (await fetch(`https://api3.geo.admin.ch/rest/services/all/MapServer/identify?${query}`)).json();
+    const response = await fetch(`https://api3.geo.admin.ch/rest/services/all/MapServer/identify?${query}`, { signal: AbortSignal.timeout(8000) });
+    if (!response.ok) return null;
+    const data = await response.json();
     const place = data.results?.[0]?.attributes;
     if (!place?.plz || !place.langtext) return null;
     const plain = String(place.langtext)
@@ -210,7 +213,7 @@ export class Weather {
             forecast_days: String(DAYS),
           });
           if (group[0].ele !== undefined) query.set('elevation', group.map((s) => Math.round(s.ele!)).join(','));
-          const response = await fetch(`${API}?${query}`);
+          const response = await fetch(`${API}?${query}`, { signal: AbortSignal.timeout(12000) });
           if (!response.ok) throw new Error(`HTTP ${response.status}`);
           const data = await response.json();
           (Array.isArray(data) ? data : [data]).forEach((entry: any, i: number) => {
@@ -250,6 +253,7 @@ export class Weather {
       if (!marker) {
         const element = h('div', { class: `weather-spot${spot.ele !== undefined ? ' summit' : ''}` });
         element.addEventListener('click', (event) => {
+          if (interaction.drawing) return;
           event.stopPropagation();
           this.onOpen(spot);
         });

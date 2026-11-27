@@ -104,7 +104,7 @@ function routerDown(): void {
 
 async function routed(a: Point, b: Point, reach: number): Promise<Point[] | null> {
   try {
-    const response = await fetch(`${ROUTER}?lonlats=${a.join(',')}|${b.join(',')}&profile=${PROFILE}&alternativeidx=0&format=geojson`);
+    const response = await fetch(`${ROUTER}?lonlats=${a.join(',')}|${b.join(',')}&profile=${PROFILE}&alternativeidx=0&format=geojson`, { signal: AbortSignal.timeout(10000) });
     if (response.status >= 500 || response.status === 429) routerDown();
     if (!response.ok) return null; // e.g. no path within reach of a point
     const coords = ((await response.json()).features?.[0]?.geometry?.coordinates ?? []) as number[][];
@@ -558,6 +558,20 @@ export class Planner {
       }
       if (index === this.points.length - 1) this.setDrawing('end');
       else if (index === 0) this.setDrawing('start');
+      else if (index > 0) {
+        // Touch-accessible deletion for intermediate waypoints (iOS does not fire contextmenu on markers).
+        const removeBtn = h('button', { type: 'button', class: 'plan-remove-pt' }, 'Remove point');
+        const tip = new maplibregl.Popup({ closeButton: false, offset: 12 }).setLngLat(point.at).setDOMContent(removeBtn).addTo(this.map);
+        removeBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          tip.remove();
+          const current = this.points.indexOf(point);
+          if (current >= 0) {
+            this.checkpoint();
+            this.remove(current);
+          }
+        });
+      }
     });
     element.addEventListener('contextmenu', (event) => {
       event.preventDefault();
@@ -642,8 +656,8 @@ export class Planner {
     if (!this.snap) return;
     const local = this.alongNetwork(a, b);
     const path = local ?? (await routed(a, b, this.osmReach()));
-    // The route may have been edited while waiting.
-    if (!path || this.legs[index] !== leg || this.points[index]?.at !== a || this.points[index + 1]?.at !== b) return;
+    // The route may have been edited, switched to readonly, or snapping turned off while waiting.
+    if (!path || !this.snap || this.readonly || this.legs[index] !== leg || this.points[index]?.at !== a || this.points[index + 1]?.at !== b) return;
     leg.coords = join(a, path, b);
     this.changed();
   }
@@ -1467,13 +1481,18 @@ export class Planner {
 
   // ── name, save, export ──
 
+  private nameToken = 0;
+
   /** "Start place – finish place" from OpenStreetMap, unless the user typed a name. */
   private async suggestName(): Promise<void> {
     if (this.nameEdited || !this.points.length) return;
-    const place = placeName;
-    const start = await place(this.points[0].at);
-    const finish = this.points.length > 1 ? await place(this.points[this.points.length - 1].at) : null;
-    if (this.nameEdited || !start) return;
+    const token = ++this.nameToken;
+    const startPoint = this.points[0].at;
+    const finishPoint = this.points.length > 1 ? this.points[this.points.length - 1].at : null;
+    const start = await placeName(startPoint);
+    if (token !== this.nameToken || this.nameEdited || !this.points.length || this.points[0].at !== startPoint) return;
+    const finish = finishPoint ? await placeName(finishPoint) : null;
+    if (token !== this.nameToken || this.nameEdited || !start) return;
     this.nameInput.value = finish && finish !== start ? `${start} – ${finish}` : this.points.length > 1 ? `${start} round trip` : `Route from ${start}`;
   }
 

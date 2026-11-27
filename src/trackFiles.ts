@@ -121,10 +121,12 @@ export function readFit(buffer: ArrayBuffer): Recording {
       const header = view.getUint8(p++);
       const compressed = (header & 0x80) !== 0;
       if (!compressed && header & 0x40) {
+        if (p + 5 > end) throw new Error('damaged FIT file');
         const little = view.getUint8(p + 1) === 0;
         const global = view.getUint16(p + 2, little);
         const count = view.getUint8(p + 4);
         p += 5;
+        if (p + count * 3 > end) throw new Error('damaged FIT file');
         const fields: Definition['fields'] = [];
         let size = 0;
         for (let i = 0; i < count; i++, p += 3) {
@@ -132,7 +134,9 @@ export function readFit(buffer: ArrayBuffer): Recording {
           size += view.getUint8(p + 1);
         }
         if (header & 0x20) {
+          if (p >= end) throw new Error('damaged FIT file');
           const developer = view.getUint8(p++);
+          if (p + developer * 3 > end) throw new Error('damaged FIT file');
           for (let i = 0; i < developer; i++, p += 3) size += view.getUint8(p + 1);
         }
         definitions.set(header & 0x0f, { global, little, fields, size });

@@ -8,24 +8,24 @@ A prioritized roadmap for improving stability, performance, modularity, and outd
 
 *Low-risk, high-impact fixes to prevent race conditions, UI traps, data loss, and security issues.*
 
-- [ ] **Async race conditions & request cancellation**:
+- [x] **Async race conditions & request cancellation**:
   - Add monotonic request tokens + `AbortController` to `SlfLayers` (`setBulletin`, `setStations`, `setAvalanches`), `SacRoutes` click lookups, `TerrainCheck` (`compute`/`clear`), `Planner` (`suggestName`/`connect`), `Panel.applyPreset`, `Search`, and `SunControls.locateZone`.
   - Check `response.ok` before `.json()` across all API clients (especially `src/layers/sac.ts`, preventing HTTP 429/503 from permanently caching `null` grades).
   - Add `AbortSignal.timeout` + clean cancellation to `elevation.ts`, `places.ts`, `weather.ts`, `weatherCard.ts`, and `planner.ts` (BRouter).
-- [ ] **Deterministic Z-order & unified map interactions**:
+- [x] **Deterministic Z-order & unified map interactions**:
   - Split `SLOT.top` in `src/map.ts` into deterministic sub-slots: `slot-area-data` → `slot-line-highlight` → `slot-line-data` → `slot-point-data` (so toggling Avalanche Bulletin ON never paints over routes or stations).
   - Restore default MapLibre `glyphs` when switching from an external vector base style back to a raster base map.
   - Replace `interaction = { drawing: false }` with an explicit tool-mode controller (`'explore' | 'draw-route' | 'draw-area'`) respected by **all** DOM markers (`PeakLabels`, `Huts`, `Gipfelbuch`, `Webcams`, `Weather`), and centralize click priority (`point > line > area > async raster identify`) + hover cursor ref-counting.
-- [ ] **Data pipeline & deployment fixes**:
+- [x] **Data pipeline & deployment fixes**:
   - Fix `scripts/deploy.sh` so deploying doesn't overwrite live cron-refreshed `data/gipfelbuch.json` on `gh-pages`.
   - Fix cross-cell route disappearance in `scripts/fetch-skitourenguru.mjs`, `fetch-snowshoe.mjs`, and `fetch-camptocamp.mjs` (index each route into every cell its geometry intersects, deduplicating by ID on load).
-- [ ] **Security, parser & UX hardening**:
+- [x] **Security, parser & UX hardening**:
   - Cap `DecompressionStream` output size in `src/share.ts` (prevent decompression-bomb tab crashes) and validate decoded coordinate bounds (`[-90, 90]`, `[-180, 180]`).
   - Use `encodeURIComponent(url)` in `LayerManager` `userProxy` concatenation; validate `https?://` on all popup `href`s (`routes.ts`, `routeSources.ts`); escape `validTimePeriod` in `slf.ts` (`bulletinHtml`).
   - Add DataView bounds checks in `readFit()` (`src/trackFiles.ts`).
   - Fix `typing()` in `src/keys.ts` so checkboxes and range sliders don't block `WASDQERF`/`N`/`L`/`/` shortcuts.
   - Add a touch-accessible way to delete intermediate waypoints in `Planner` (iOS Safari does not fire `contextmenu` on `<div>` markers).
-- [ ] **CI & typechecking**:
+- [x] **CI & typechecking**:
   - Add `"tests"` to `tsconfig.json` `"include"`.
   - Add `.github/workflows/ci.yml` running `npm test` and `npm run build` on pushes and PRs.
 

@@ -19,6 +19,7 @@ const CLICK_RADIUS = 9; // px
 
 const escapeHtml = (s: unknown) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
+const safeHref = (url: unknown): string | null => (typeof url === 'string' && /^https?:\/\//i.test(url) ? url : null);
 
 interface RouteResult {
   layerBodId: string;
@@ -29,6 +30,7 @@ interface RouteResult {
 
 export function enableRouteInfo(map: maplibregl.Map, layers: LayerManager, popup: maplibregl.Popup): void {
   let request = 0;
+  let controller: AbortController | null = null;
 
   const clear = () => (map.getSource(HIGHLIGHT) as GeoJSONSource | undefined)?.setData({ type: 'FeatureCollection', features: [] });
   popup.on('close', clear);
@@ -40,8 +42,16 @@ export function enableRouteInfo(map: maplibregl.Map, layers: LayerManager, popup
   map.on('click', async (event) => {
     const wanted = active();
     if (!wanted.length || map.getZoom() < 10 || interaction.drawing) return;
-    const token = ++request;
     const { x, y } = event.point;
+    // Vector point/line layers take priority over async raster identify.
+    const vectorLayers = map
+      .getStyle()
+      .layers.map((l) => l.id)
+      .filter((id) => ['slf-stations', 'slf-avalanches', 'guru-routes', 'sac-routes-casing', 'sac-climbing'].includes(id) || /^routes-.*-(casing|point)$/.test(id));
+    if (vectorLayers.length && map.queryRenderedFeatures([[x - 6, y - 6], [x + 6, y + 6]], { layers: vectorLayers }).length) return;
+    const token = ++request;
+    controller?.abort();
+    controller = new AbortController();
     const a = map.unproject([x - CLICK_RADIUS, y + CLICK_RADIUS]);
     const b = map.unproject([x + CLICK_RADIUS, y - CLICK_RADIUS]);
     const box = [Math.min(a.lng, b.lng), Math.min(a.lat, b.lat), Math.max(a.lng, b.lng), Math.max(a.lat, b.lat)].map((v) => v.toFixed(6)).join(',');
@@ -60,11 +70,11 @@ export function enableRouteInfo(map: maplibregl.Map, layers: LayerManager, popup
     });
     let results: RouteResult[];
     try {
-      const response = await fetch(`${IDENTIFY}?${query}`);
+      const response = await fetch(`${IDENTIFY}?${query}`, { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]) });
       if (!response.ok) return;
       results = (await response.json()).results ?? [];
     } catch {
-      return; // lookup service unreachable: the map still works
+      return; // lookup service unreachable or aborted: the map still works
     }
     if (token !== request) return;
     // Many drawn segments carry no description: prefer one that does.
@@ -89,8 +99,9 @@ export function enableRouteInfo(map: maplibregl.Map, layers: LayerManager, popup
         .map(([label, value]) => `<tr><td class="muted">${label}</td><td>${escapeHtml(value)}</td></tr>`)
         .join('');
       const kind = r.layerBodId.includes('schneeschuh') ? 'Snowshoe route' : 'Ski route';
-      const link = p.url_sac_en
-        ? `<div class="popup-links"><a href="${escapeHtml(p.url_sac_en)}" target="_blank" rel="noopener">Open in SAC route portal</a></div>`
+      const sacHref = safeHref(p.url_sac_en);
+      const link = sacHref
+        ? `<div class="popup-links"><a href="${escapeHtml(sacHref)}" target="_blank" rel="noopener">Open in SAC route portal</a></div>`
         : '';
       const others =
         described.length > 1
@@ -123,7 +134,7 @@ export function enableRouteInfo(map: maplibregl.Map, layers: LayerManager, popup
     map.addSource(HIGHLIGHT, { type: 'geojson', data });
     map.addLayer(
       { id: HIGHLIGHT, type: 'line', source: HIGHLIGHT, layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#00d5ff', 'line-width': 5, 'line-opacity': 0.85 } },
-      SLOT.top,
+      SLOT.lineHighlight,
     );
   }
 }

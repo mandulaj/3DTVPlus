@@ -138,21 +138,21 @@ export class StoredRoutes {
       return false;
     }
     const empty: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
-    map.addSource(this.source, { type: 'geojson', data: empty, attribution: `${spec.attribution} (copy of ${this.index.fetched})` });
+    map.addSource(this.source, { type: 'geojson', data: empty, attribution: `${spec.attribution} (copy of ${escapeHtml(this.index.fetched)})` });
     map.addSource(this.marked, { type: 'geojson', data: empty });
     const lines = ['!=', ['geometry-type'], 'Point'] as never;
     const round = { 'line-cap': 'round' as const, 'line-join': 'round' as const };
-    map.addLayer({ id: this.marked, type: 'line', source: this.marked, layout: round, paint: { 'line-color': '#00d5ff', 'line-width': ['interpolate', ['linear'], ['zoom'], 10, 10, 14, 18], 'line-opacity': 0.9 } }, SLOT.top);
-    map.addLayer({ id: this.layers.casing, type: 'line', source: this.source, filter: lines, minzoom: MIN_ZOOM, layout: round, paint: { 'line-color': '#ffffff', 'line-opacity': 0.75, 'line-width': ['interpolate', ['linear'], ['zoom'], 10, 3, 14, 6.5] } }, SLOT.top);
-    map.addLayer({ id: this.layers.line, type: 'line', source: this.source, filter: lines, minzoom: MIN_ZOOM, layout: round, paint: { 'line-color': spec.colour, 'line-width': ['interpolate', ['linear'], ['zoom'], 10, 1.5, 14, 3.5] } }, SLOT.top);
+    map.addLayer({ id: this.marked, type: 'line', source: this.marked, layout: round, paint: { 'line-color': '#00d5ff', 'line-width': ['interpolate', ['linear'], ['zoom'], 10, 10, 14, 18], 'line-opacity': 0.9 } }, SLOT.lineHighlight);
+    map.addLayer({ id: this.layers.casing, type: 'line', source: this.source, filter: lines, minzoom: MIN_ZOOM, layout: round, paint: { 'line-color': '#ffffff', 'line-opacity': 0.75, 'line-width': ['interpolate', ['linear'], ['zoom'], 10, 3, 14, 6.5] } }, SLOT.line);
+    map.addLayer({ id: this.layers.line, type: 'line', source: this.source, filter: lines, minzoom: MIN_ZOOM, layout: round, paint: { 'line-color': spec.colour, 'line-width': ['interpolate', ['linear'], ['zoom'], 10, 1.5, 14, 3.5] } }, SLOT.line);
     // Routes without a drawn line: a dot where the source places them (usually the summit).
     map.addLayer(
       { id: this.layers.point, type: 'circle', source: this.source, filter: ['==', ['geometry-type'], 'Point'], minzoom: MIN_ZOOM, paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 9, 3, 14, 6], 'circle-color': spec.colour, 'circle-stroke-color': '#ffffff', 'circle-stroke-width': 1.5 } },
-      SLOT.top,
+      SLOT.point,
     );
     for (const id of [this.layers.casing, this.layers.point]) {
-      map.on('mouseenter', id, () => (map.getCanvas().style.cursor = 'pointer'));
-      map.on('mouseleave', id, () => (map.getCanvas().style.cursor = ''));
+      map.on('mouseenter', id, () => interaction.setHover(map, id, true));
+      map.on('mouseleave', id, () => interaction.setHover(map, id, false));
     }
     return true;
   }
@@ -177,7 +177,18 @@ export class StoredRoutes {
     if (loaded.some((cell) => cell === null)) this.onError(`Some of ${name} could not be loaded.`);
     // No hint where a collection simply has nothing: with several switched on, most views are outside some of them.
     this.onHint(all > names.length ? 'Shown near the map centre only: zoom in for the rest.' : null);
-    const routes = loaded.flatMap((cell) => cell ?? []);
+    const seen = new Set<string | number>();
+    const routes: GeoJSON.Feature[] = [];
+    for (const cell of loaded) {
+      for (const feature of cell ?? []) {
+        const key = feature.id ?? feature.properties?.id;
+        if (key !== undefined) {
+          if (seen.has(key)) continue;
+          seen.add(key);
+        }
+        routes.push(feature);
+      }
+    }
     if (routes.length === this.loaded.length && routes.every((feature, i) => feature === this.loaded[i])) return; // same cells as before
     this.loaded = routes;
     this.redraw();
@@ -244,6 +255,7 @@ export class StoredRoutes {
     const facts = spec.facts(p).filter(Boolean).map(String).join(' · ');
     const links = spec
       .links(p)
+      .filter((link) => /^https?:\/\//i.test(link.href))
       .map((link) => `<a${link.muted ? ' class="muted"' : ''} href="${escapeHtml(link.href)}" target="_blank" rel="noopener">${escapeHtml(link.label)}</a>`)
       .join(' ');
     return (

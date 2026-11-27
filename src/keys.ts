@@ -1,6 +1,7 @@
 // Keyboard: W/A/S/D move over the terrain, Q/E turn, R/F tilt (hold Shift to go faster),
 // N puts north up, L switches look mode. The arrow keys keep MapLibre's own behaviour.
 import type * as maplibregl from 'maplibre-gl';
+import { isTyping } from './interaction';
 
 const MOVE = 520; // pixels of map per second
 const TURN = 70; // degrees per second
@@ -12,9 +13,6 @@ export function enableKeys(map: maplibregl.Map, actions: { toggleLookMode: () =>
   let fast = false;
   let last = 0;
   let running = false;
-
-  const typing = (target: EventTarget | null) =>
-    target instanceof HTMLElement && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName));
 
   function frame(now: number): void {
     if (!down.size) {
@@ -40,7 +38,7 @@ export function enableKeys(map: maplibregl.Map, actions: { toggleLookMode: () =>
 
   window.addEventListener('keydown', (event) => {
     fast = event.shiftKey;
-    if (event.ctrlKey || event.metaKey || event.altKey || typing(event.target)) return;
+    if (event.ctrlKey || event.metaKey || event.altKey || isTyping(event.target)) return;
     if (HELD.includes(event.code)) {
       event.preventDefault();
       down.add(event.code);

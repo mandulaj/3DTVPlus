@@ -114,7 +114,17 @@ for (const [n, [lng, lat]] of wanted.entries()) {
         process.stderr.write(`\n  ${summary.document_id}: ${error.message}\n`);
       }
     }
-    cells.get(home).push({ type: 'Feature', id: summary.document_id, properties, geometry });
+    const feature = { type: 'Feature', id: summary.document_id, properties, geometry };
+    const touched = new Set([home]);
+    if (geometry.type === 'MultiLineString') {
+      for (const part of geometry.coordinates) {
+        for (const [lng, lat] of part) {
+          const c = cellOf(lng, lat);
+          if (cells.has(c)) touched.add(c);
+        }
+      }
+    }
+    for (const c of touched) cells.get(c).push(feature);
   }
 }
 

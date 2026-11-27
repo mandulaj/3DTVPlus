@@ -119,7 +119,7 @@ describe('recorded heights and times', () => {
       .join('');
     const tcx = readTrack('r.tcx', bytes(`<TrainingCenterDatabase><Activities><Activity><Lap><Track>${body}</Track></Lap></Activity></Activities></TrainingCenterDatabase>`));
     expect(tcx.ele![10]).toBe(810);
-    expect(tcx.time![10] - tcx.time![0]).toBe(10000);
+    expect(tcx.time![10]! - tcx.time![0]!).toBe(10000);
   });
 
   it('reads time and altitude from FIT, including compressed timestamps', () => {
@@ -143,5 +143,11 @@ describe('recorded heights and times', () => {
     expect(fit.segments[0]).toHaveLength(6);
     expect(fit.ele).toEqual([1200, 1210, 1220, 1230, 1240, 1250]);
     expect(fit.time!.map((t) => t! / 1000 - FIT_EPOCH - fitStart)).toEqual([0, 4, 8, 12, 16, 20]);
+  });
+
+  it('rejects a truncated FIT definition header cleanly', () => {
+    // Valid 14-byte FIT header claiming 4 bytes of data, containing a truncated definition message (0x40).
+    const truncated = Uint8Array.from([14, 0x20, 0, 0, 4, 0, 0, 0, 0x2e, 0x46, 0x49, 0x54, 0, 0, 0x40, 0, 0, 0]).buffer;
+    expect(() => readTrack('broken.fit', truncated)).toThrow('damaged FIT file');
   });
 });

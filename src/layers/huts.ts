@@ -1,6 +1,7 @@
 // Mountain huts and shelters from refuges.info (CC BY-SA), asked live for the area in view.
 // Mostly the French and western Alps and the Pyrenees.
 import * as maplibregl from 'maplibre-gl';
+import { interaction } from '../interaction';
 import { h } from '../ui/dom';
 
 const API = 'https://www.refuges.info/api/bbox';
@@ -132,6 +133,7 @@ export class Huts {
       const kind = KIND_NAMES.find(([pattern]) => pattern.test(hut.kind));
       const element = h('button', { type: 'button', class: `hut ${kind?.[2] ?? ''}`, title: `${hut.name}${hut.altitude ? `, ${Math.round(hut.altitude)} m` : ''}`, 'aria-label': `Hut: ${hut.name}` }, '⌂');
       element.addEventListener('click', (event) => {
+        if (interaction.drawing) return;
         event.stopPropagation();
         const facts = [kind?.[1] ?? hut.kind, hut.altitude && `${Math.round(hut.altitude)} m`, hut.beds && `${hut.beds} places to sleep`].filter(Boolean).join(' · ');
         this.popup

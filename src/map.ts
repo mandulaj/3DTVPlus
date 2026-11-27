@@ -7,18 +7,23 @@ import workerSource from 'maplibre-gl/dist/maplibre-gl-worker.mjs?raw';
 
 export const DEM_TILES = 'https://tiles.mapterhorn.com/{z}/{x}/{y}.webp';
 export const DEM_MAXZOOM = 17;
+export const DEFAULT_GLYPHS = 'https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf';
 const DEM_ATTRIBUTION = '<a href="https://mapterhorn.com/attribution" target="_blank">© Mapterhorn</a>';
 
 export const WATER_LAYERS = ['water-fill', 'water-line'];
 const WATER_COLOUR = '#9dbfd3';
 const WATER_EDGE = '#7ba3bb';
 
-/** Invisible anchor layers that define the draw order of everything added later. */
+/** Invisible anchor layers that define the deterministic draw order of everything added later. */
 export const SLOT = {
   base: 'slot-base', // base map layers go below this
   overlay: 'slot-overlay', // relief shading + raster overlays go below this
   shadow: 'slot-shadow', // sun shadows / night go below this
-  top: 'slot-top', // vector data (bulletin, stations) goes below this
+  area: 'slot-area-data', // polygon/area overlays (bulletin, terrain check) go below this
+  lineHighlight: 'slot-line-highlight', // selected route highlight goes below this
+  line: 'slot-line-data', // vector route lines (SAC, stored routes) go below this
+  point: 'slot-point-data', // point overlays (stations, avalanches, guru, crags) go below this
+  top: 'slot-point-data', // alias for backwards compatibility
   tracks: 'slot-tracks', // dropped and saved tracks: above every map layer
   plan: 'slot-plan', // the route being planned or viewed: above the tracks
 } as const;
@@ -101,6 +106,7 @@ export function createMap(container: string): maplibregl.Map {
 
   const style: StyleSpecification = {
     version: 8,
+    glyphs: DEFAULT_GLYPHS,
     projection: { type: 'globe' },
     // One elevation source feeds terrain, relief shading and elevation colours:
     // a second copy doubles downloads, decoding and texture uploads.
@@ -167,7 +173,10 @@ export function createMap(container: string): maplibregl.Map {
       },
       slot(SLOT.overlay),
       slot(SLOT.shadow),
-      slot(SLOT.top),
+      slot(SLOT.area),
+      slot(SLOT.lineHighlight),
+      slot(SLOT.line),
+      slot(SLOT.point),
       slot(SLOT.tracks),
       slot(SLOT.plan),
     ],

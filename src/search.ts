@@ -2,6 +2,7 @@
 // Names come from OpenStreetMap through the Photon search service (no addresses: streets and
 // houses are left out); before anything is typed, the highest peaks in view are offered.
 import * as maplibregl from 'maplibre-gl';
+import { isTyping } from './interaction';
 import { vectorLayers } from './map';
 import { h } from './ui/dom';
 
@@ -108,14 +109,17 @@ export function enableSearch(map: maplibregl.Map): void {
     });
   }
 
+  let searchController: AbortController | null = null;
   async function search(text: string): Promise<void> {
     const token = ++request;
+    searchController?.abort();
+    searchController = new AbortController();
     const centre = map.getCenter();
     // Results near the map are preferred, but a well-known name far away still comes up.
     const query = new URLSearchParams({ q: text, limit: '8', lang: 'en', lat: centre.lat.toFixed(3), lon: centre.lng.toFixed(3) });
     for (const layer of LAYERS) query.append('layer', layer);
     try {
-      const response = await fetch(`${PHOTON}?${query}`);
+      const response = await fetch(`${PHOTON}?${query}`, { signal: AbortSignal.any([searchController.signal, AbortSignal.timeout(10000)]) });
       if (!response.ok) throw new Error(String(response.status));
       const data = await response.json();
       if (token !== request) return;
@@ -185,9 +189,8 @@ export function enableSearch(map: maplibregl.Map): void {
   window.addEventListener(
     'keydown',
     (event) => {
-      const typing = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLSelectElement;
       const find = (event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === 'f';
-      if (find || (event.key === '/' && !typing)) {
+      if (find || (event.key === '/' && !isTyping(event.target))) {
         event.preventDefault(); // instead of the browser's "find in page", which finds nothing on a map
         open();
       }

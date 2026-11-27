@@ -10,13 +10,14 @@ interface Pending {
   resolve: (bitmap: ImageBitmap) => void;
   reject: (error: Error) => void;
   since: number;
+  workerIndex: number;
 }
 
 // A worker that died (out of memory) or hangs would leave its tiles waiting for ever, with no
 // shadows and nothing happening when the time changes. The pool is replaced when that happens.
 const STALL_MS = 25000;
 const RESTART_PAUSE_MS = 60000;
-let lastReply = 0;
+let workerLastReply: number[] = [];
 let lastRestart = -Infinity;
 let watchdog: number | undefined;
 const handlers = { onRestart: () => {} };
@@ -44,9 +45,19 @@ function watch(): void {
       return;
     }
     const now = performance.now();
-    let oldest = now;
-    for (const entry of pending.values()) oldest = Math.min(oldest, entry.since);
-    if (now - oldest > STALL_MS && now - lastReply > STALL_MS) restart('no answer');
+    // Per-worker stall check so a single hung worker cannot stall 1/3 of tiles indefinitely.
+    const oldestByWorker = new Map<number, number>();
+    for (const entry of pending.values()) {
+      const prev = oldestByWorker.get(entry.workerIndex) ?? now;
+      oldestByWorker.set(entry.workerIndex, Math.min(prev, entry.since));
+    }
+    for (const [idx, oldest] of oldestByWorker) {
+      const last = workerLastReply[idx] ?? 0;
+      if (now - oldest > STALL_MS && now - last > STALL_MS) {
+        restart(`worker ${idx} stalled`);
+        return;
+      }
+    }
   }, 5000);
 }
 
@@ -61,11 +72,12 @@ function ensureWorkers(): void {
   // Each worker holds its own elevation caches (roughly 100 MB): fewer of them on machines with little memory.
   const memory = (navigator as { deviceMemory?: number }).deviceMemory ?? 8;
   const count = Math.max(1, Math.min(memory <= 4 ? 2 : 3, Math.floor((navigator.hardwareConcurrency || 4) / 2)));
-  workers = Array.from({ length: count }, () => {
+  workerLastReply = new Array(count).fill(0);
+  workers = Array.from({ length: count }, (_, idx) => {
     const worker = new ShadowWorker();
     worker.onmessage = (event: MessageEvent<ShadowResponse>) => {
       const message = event.data;
-      lastReply = performance.now();
+      workerLastReply[idx] = performance.now();
       const entry = pending.get(message.id);
       if (!entry) return;
       pending.delete(message.id);
@@ -80,6 +92,7 @@ function ensureWorkers(): void {
       }
     };
     worker.onerror = (event) => restart(event.message || 'worker failed');
+    worker.onmessageerror = () => restart('worker message error');
     return worker;
   });
 }
@@ -88,6 +101,7 @@ function ensureWorkers(): void {
 export function releaseShadowWorkers(): void {
   for (const worker of workers) worker.terminate();
   workers = [];
+  workerLastReply = [];
   for (const entry of pending.values()) {
     const error = new Error('aborted');
     error.name = 'AbortError';
@@ -103,10 +117,11 @@ export function registerShadowProtocol(): void {
     ensureWorkers();
     const [z, x, y, time] = match.slice(1).map(Number);
     const id = nextId++;
-    // Neighbouring tiles share most elevation data: route them to the same worker's cache.
-    const worker = workers[((x >> 2) * 31 + (y >> 2) * 17 + z) % workers.length];
+    // Neighbouring tiles share most elevation data: route geographically overlapping tiles to the same worker.
+    const workerIndex = ((x >> 2) * 31 + (y >> 2) * 17) % workers.length;
+    const worker = workers[workerIndex];
     return new Promise<{ data: ImageBitmap }>((resolve, reject) => {
-      pending.set(id, { resolve: (bitmap) => resolve({ data: bitmap }), reject, since: performance.now() });
+      pending.set(id, { resolve: (bitmap) => resolve({ data: bitmap }), reject, since: performance.now(), workerIndex });
       watch();
       abortController.signal.addEventListener('abort', () => {
         if (pending.has(id)) worker.postMessage({ type: 'abort', id });

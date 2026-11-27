@@ -165,13 +165,16 @@ export class SunControls {
     this.commit();
   }
 
+  private saveTimer: number | undefined;
+
   private commit(): void {
     if (!this.date.value) return;
     const [year, month, day] = this.date.value.split('-').map(Number);
     const minutes = Number(this.time.value);
     this.sun.setTime(instant(year, month, day, minutes));
     this.refresh();
-    this.onStateChange();
+    clearTimeout(this.saveTimer);
+    this.saveTimer = window.setTimeout(() => this.onStateChange(), 250);
   }
 
   private refresh(): void {

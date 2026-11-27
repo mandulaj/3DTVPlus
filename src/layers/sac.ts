@@ -6,6 +6,7 @@ import type * as maplibregl from 'maplibre-gl';
 import type { GeoJSONSource } from 'maplibre-gl';
 import { interaction } from '../interaction';
 import { SLOT } from '../map';
+import { groundBounds } from '../viewport';
 import { toLv95, toWgs84 } from '../swissGrid';
 import { describeStats, mainClimb, trackStats } from '../trackStats';
 import { filtersClimb, filtersGrade, gradeRank, isActive, passes, type RouteFilter, type Scale } from './routeFilter';
@@ -53,6 +54,7 @@ export class SacRoutes {
   private timer: number | undefined;
   private request = 0;
   private drawn: GeoJSON.Feature[] = [];
+  private drawnViewKey = '';
   /** Per discipline: only routes within these limits are shown. */
   readonly filters = new Map<SacDiscipline, RouteFilter>();
   /** Looked up as filters need them: a route's grade (null: none given) and height gain. */
@@ -209,6 +211,7 @@ export class SacRoutes {
 
   private async refresh(): Promise<void> {
     if (!this.enabled.size) {
+      this.drawnViewKey = '';
       this.onHint(null);
       (this.map.getSource(SOURCE) as GeoJSONSource | undefined)?.setData({ type: 'FeatureCollection', features: [] });
       (this.map.getSource(POINTS) as GeoJSONSource | undefined)?.setData({ type: 'FeatureCollection', features: [] });
@@ -219,8 +222,13 @@ export class SacRoutes {
       this.onHint('Zoom in to see SAC routes.');
       return;
     }
-    const bounds = this.map.getBounds();
-    const corners = [bounds.getSouthWest(), bounds.getNorthEast(), bounds.getNorthWest(), bounds.getSouthEast()].map((c) => toLv95(c.lng, c.lat));
+    const viewBounds = groundBounds(this.map, 55);
+    const corners = [
+      [viewBounds.west, viewBounds.south],
+      [viewBounds.east, viewBounds.north],
+      [viewBounds.west, viewBounds.north],
+      [viewBounds.east, viewBounds.south],
+    ].map(([lng, lat]) => toLv95(lng, lat));
     const x0 = Math.floor(Math.min(...corners.map((c) => c[0])) / CELL);
     const x1 = Math.floor(Math.max(...corners.map((c) => c[0])) / CELL);
     const y0 = Math.floor(Math.min(...corners.map((c) => c[1])) / CELL);
@@ -233,10 +241,13 @@ export class SacRoutes {
     const view = wanted.slice(0, MAX_CELLS_PER_VIEW);
     this.onHint(wanted.length > view.length ? 'SAC routes shown near the map centre only: zoom in for the rest.' : null);
 
+    const viewKey = view.map(([x, y]) => `${x},${y}`).join('|');
+    if (viewKey === this.drawnViewKey) return;
     const token = ++this.request;
     const loaded = await Promise.all(view.map(([x, y]) => this.cell(x, y).catch(() => null)));
     if (token !== this.request) return;
     if (loaded.some((c) => c === null)) this.onError('Some SAC routes could not be loaded.');
+    else this.drawnViewKey = viewKey;
     const seen = new Set<string | number>();
     const unique = (features: GeoJSON.Feature[]) => features.filter((f) => (seen.has(f.id!) ? false : (seen.add(f.id!), true)));
     const cells = loaded.filter((c): c is Cell => c !== null);

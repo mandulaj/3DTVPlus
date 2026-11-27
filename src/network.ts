@@ -171,18 +171,21 @@ export class Network {
       }
     }
 
-    // Dijkstra from every start hook, until nothing shorter than the best finish can remain.
+    // A* from every start hook toward `b`, with a detour budget so disconnected components exit fast.
     const count = this.nodes.length;
     const distance = new Float64Array(count).fill(Infinity);
     const previous = new Int32Array(count).fill(-1);
     const origin = new Int32Array(count).fill(-1); // start hook a node was first reached from
+    const maxCost = Math.max(1200, metres(a, b) * 6 + 500);
     const heap = new Heap();
     const reachNode = (node: number, d: number, from: number, hook: number) => {
       if (d >= distance[node]) return;
+      const f = d + metres(this.nodes[node], b);
+      if (f > maxCost || (best && f >= best.length)) return;
       distance[node] = d;
       previous[node] = from;
       origin[node] = hook;
-      heap.push(d, node);
+      heap.push(f, node);
     };
     starts.forEach((s, i) => {
       reachNode(s.a, s.off * OFF_LINE_COST + s.toA, -1, i);
@@ -197,9 +200,11 @@ export class Network {
     let bestNode = -1;
     let bestHook: Hook | null = null;
     for (let top = heap.pop(); top; top = heap.pop()) {
-      const [d, node] = top;
-      if (d > distance[node]) continue; // outdated entry
-      if (best && d >= best.length) break;
+      const [f, node] = top;
+      const d = distance[node];
+      if (best && f >= best.length) break;
+      if (f > maxCost) break;
+      if (d + metres(this.nodes[node], b) < f - 1e-6) continue; // outdated heap entry
       const end = finish.get(node);
       if (end && (!best || d + end.tail < best.length)) {
         best = { length: d + end.tail, path: [] };
@@ -214,8 +219,9 @@ export class Network {
     if (bestNode >= 0 && bestHook) {
       const middle: Point[] = [];
       let cursor = bestNode;
-      for (; previous[cursor] >= 0; cursor = previous[cursor]) middle.unshift(this.nodes[cursor]);
-      middle.unshift(this.nodes[cursor]);
+      for (; previous[cursor] >= 0; cursor = previous[cursor]) middle.push(this.nodes[cursor]);
+      middle.push(this.nodes[cursor]);
+      middle.reverse();
       best.path = [starts[origin[cursor]].on, ...middle, bestHook.on];
     }
     return best.path.filter((c, i, all) => i === 0 || c[0] !== all[i - 1][0] || c[1] !== all[i - 1][1]);

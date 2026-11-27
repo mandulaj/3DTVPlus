@@ -26,6 +26,8 @@ const mix = (a: RGB, b: RGB, t: number): string => {
 };
 const SKY = { day: [91, 155, 217] as RGB, dusk: [56, 76, 128] as RGB, night: [8, 12, 30] as RGB };
 const HORIZON = { day: [223, 234, 242] as RGB, dusk: [245, 170, 100] as RGB, night: [22, 30, 56] as RGB };
+const HILLSHADE_HIGHLIGHT = { day: [255, 241, 207] as RGB, dusk: [255, 138, 62] as RGB };
+const HILLSHADE_SHADOW = { day: [27, 34, 51] as RGB, dusk: [20, 26, 62] as RGB };
 
 export class SunController {
   /** Shadow tile count and total compute time, for diagnostics. */
@@ -170,16 +172,20 @@ export class SunController {
     const moved = Math.abs(info.azimuth - this.applied.azimuth) > 0.5 || Math.abs(info.altitude - this.applied.altitude) > 0.25;
     if (!timeChanged && !moved) return;
     this.applied = { azimuth: info.azimuth, altitude: info.altitude };
+    const a = info.altitude;
+    const golden = Math.min(1, Math.max(0, 1 - (a - 1) / 14));
     map.setPaintProperty('hillshade', 'hillshade-illumination-direction', info.azimuth);
-    map.setPaintProperty('hillshade', 'hillshade-highlight-color', '#fff1cf'); // warm sunlit slopes
+    map.setPaintProperty('hillshade', 'hillshade-highlight-color', mix(HILLSHADE_HIGHLIGHT.day, HILLSHADE_HIGHLIGHT.dusk, golden));
+    map.setPaintProperty('hillshade', 'hillshade-shadow-color', mix(HILLSHADE_SHADOW.day, HILLSHADE_SHADOW.dusk, golden));
 
     // 1 = full day, 0 = sun on horizon, -1 = night (end of nautical twilight)
-    const a = info.altitude;
     const sky = a >= 0 ? mix(SKY.dusk, SKY.day, a / 12) : mix(SKY.dusk, SKY.night, -a / 10);
     const horizon = a >= 0 ? mix(HORIZON.dusk, HORIZON.day, a / 12) : mix(HORIZON.dusk, HORIZON.night, -a / 10);
     map.setSky({ 'sky-color': sky, 'horizon-color': horizon, 'fog-color': horizon });
 
-    if (timeChanged) (map.getSource(NIGHT_SOURCE) as GeoJSONSource | undefined)?.setData(nightPolygon(this.time));
+    if (timeChanged && map.getZoom() <= SHADOW_MIN_ZOOM + 1) {
+      (map.getSource(NIGHT_SOURCE) as GeoJSONSource | undefined)?.setData(nightPolygon(this.time));
+    }
     this.onUpdate(info);
   }
 
@@ -196,6 +202,7 @@ export class SunController {
     const map = this.map;
     map.setPaintProperty('hillshade', 'hillshade-illumination-direction', 315);
     map.setPaintProperty('hillshade', 'hillshade-highlight-color', '#ffffff');
+    map.setPaintProperty('hillshade', 'hillshade-shadow-color', '#1b2233');
     map.setSky({ 'sky-color': mix(SKY.day, SKY.day, 0), 'horizon-color': mix(HORIZON.day, HORIZON.day, 0), 'fog-color': mix(HORIZON.day, HORIZON.day, 0) });
   }
 
@@ -221,9 +228,9 @@ export class SunController {
   private pump(): void {
     if (!this.dirty || !this.enabled) return;
     const now = performance.now();
-    if (this.busy && now - this.lastSet < 2500) {
+    if (this.busy && now - this.lastSet < 400) {
       clearTimeout(this.timer);
-      this.timer = window.setTimeout(() => this.pump(), 300);
+      this.timer = window.setTimeout(() => this.pump(), 120);
       return;
     }
     this.dirty = false;

@@ -3,6 +3,7 @@
 // come from Windy instead, with a preview picture.
 import * as maplibregl from 'maplibre-gl';
 import { interaction } from '../interaction';
+import { groundBounds } from '../viewport';
 import { h } from '../ui/dom';
 
 const DATA = './data/webcams.json';
@@ -80,8 +81,7 @@ export class Webcams {
       return;
     }
     const token = ++this.request;
-    const bounds = this.map.getBounds();
-    const view = { west: bounds.getWest(), south: bounds.getSouth(), east: bounds.getEast(), north: bounds.getNorth() };
+    const view = groundBounds(this.map, 60);
     let cams: Cam[];
     try {
       cams = this.windyKey() ? await this.fromWindy(view) : await this.fromOsm();

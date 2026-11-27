@@ -1,6 +1,7 @@
 // Drag and drop of recorded tracks (GPX, TCX, FIT): parsed in the browser, drawn on the terrain.
 import * as maplibregl from 'maplibre-gl';
 import { SLOT } from './map';
+import { idbDelete, idbGet, idbPut } from './storage';
 import { readTrack, type Point, type Recording, type Segments } from './trackFiles';
 import { h, toast } from './ui/dom';
 
@@ -203,6 +204,8 @@ export function enableTrackDrop(map: maplibregl.Map, listParent: HTMLElement): T
     save();
   }
 
+  let saveChain = Promise.resolve();
+
   function save(): void {
     const stored: StoredTrack[] = tracks.map(({ name, colour, segments, recorded }) => {
       const entry: StoredTrack = { name, colour, segments };
@@ -214,30 +217,35 @@ export function enableTrackDrop(map: maplibregl.Map, listParent: HTMLElement): T
       }
       return entry;
     });
-    try {
-      if (stored.length) localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
-      else localStorage.removeItem(STORAGE_KEY);
-    } catch {
-      // Browser storage holds about 5 MB. Keep as many tracks as fit, oldest first.
-      let kept = stored.length;
-      while (kept > 0) {
-        try {
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(stored.slice(0, --kept)));
-          break;
-        } catch {
-          /* still too large */
-        }
-      }
-      toast(`Browser storage is full: only ${kept} of ${stored.length} tracks will be there after a reload.`);
-    }
+    saveChain = saveChain
+      .then(() => (stored.length ? idbPut('kv', STORAGE_KEY, stored) : idbDelete('kv', STORAGE_KEY)))
+      .catch(() => {
+        toast('Could not save tracks to browser storage.');
+      });
   }
 
-  function restore(): void {
-    let stored: StoredTrack[] = [];
+  async function restore(): Promise<void> {
+    let stored: StoredTrack[] | undefined;
     try {
-      stored = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '[]');
+      stored = await idbGet<StoredTrack[]>('kv', STORAGE_KEY);
     } catch {
-      return; // storage unavailable or damaged entry
+      stored = undefined;
+    }
+    // One-time migration from legacy localStorage (5 MB cap) into IndexedDB.
+    if (!stored) {
+      try {
+        const legacy = localStorage.getItem(STORAGE_KEY);
+        if (legacy) {
+          const parsed = JSON.parse(legacy);
+          if (Array.isArray(parsed) && parsed.length) {
+            stored = parsed;
+            await idbPut('kv', STORAGE_KEY, stored).catch(() => {});
+          }
+          localStorage.removeItem(STORAGE_KEY);
+        }
+      } catch {
+        return; // storage unavailable or damaged entry
+      }
     }
     if (!Array.isArray(stored)) return;
     for (const track of stored) {

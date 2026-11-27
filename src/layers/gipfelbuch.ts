@@ -5,12 +5,14 @@
 // as fresh as its last refresh.
 import * as maplibregl from 'maplibre-gl';
 import { interaction } from '../interaction';
+import { groundBounds } from '../viewport';
 import { h } from '../ui/dom';
 import type { Legend } from './slf';
 
 const DATA = './data/gipfelbuch.json';
 const SITE = 'https://www.gipfelbuch.ch/verhaeltnisse/';
 const DAY = 86400000;
+const MAX_SHOWN = 120;
 
 export interface Report {
   id: number;
@@ -133,11 +135,18 @@ export class Gipfelbuch {
   private markers: maplibregl.Marker[] = [];
   private stored: Promise<{ updated: string; reports: Report[] }> | null = null;
   private request = 0;
+  private timer: number | undefined;
 
   constructor(
     private map: maplibregl.Map,
     private popup: maplibregl.Popup,
-  ) {}
+  ) {
+    map.on('moveend', () => {
+      if (!this.enabled) return;
+      clearTimeout(this.timer);
+      this.timer = window.setTimeout(() => void this.update(), 150);
+    });
+  }
 
   setEnabled(on: boolean): void {
     this.enabled = on;
@@ -174,15 +183,20 @@ export class Gipfelbuch {
       return;
     }
     if (token !== this.request || !this.enabled) return;
+    const view = groundBounds(this.map, 140);
     const shown = data.reports.filter((report) => ageInDays(report.date) <= this.days);
+    const visible = shown.filter((report) => report.at[0] >= view.west && report.at[0] <= view.east && report.at[1] >= view.south && report.at[1] <= view.north);
     // Several reports for the same summit share one pin.
     const places = new Map<string, Report[]>();
-    for (const report of shown) {
+    for (const report of visible) {
       const key = `${report.at[0].toFixed(3)},${report.at[1].toFixed(3)}`;
       places.set(key, [...(places.get(key) ?? []), report]);
     }
-    // Oldest first, so that the freshest pins end up on top.
-    const groups = [...places.values()].sort((a, b) => (a[0].date < b[0].date ? -1 : 1));
+    // Keep freshest up to MAX_SHOWN, then draw oldest first so freshest pins end up on top.
+    const groups = [...places.values()]
+      .sort((a, b) => (a[0].date > b[0].date ? -1 : 1))
+      .slice(0, MAX_SHOWN)
+      .reverse();
     for (const reports of groups) {
       const newest = reports[0]; // the list is stored newest first
       const age = ageInDays(newest.date);

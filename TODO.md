@@ -35,20 +35,20 @@ A prioritized roadmap for improving stability, performance, modularity, and outd
 
 *Removes frame drops and freezes, upgrades 3D sunlight realism, and replaces the 5 MB `localStorage` ceiling with browser-native IndexedDB.*
 
-- [ ] **Browser IndexedDB storage layer** *(100% client-side, zero backend)*:
-  - Migrate saved GPX/TCX/FIT tracks from `localStorage` (`src/tracks.ts`) to **IndexedDB** (with automatic one-time migration of existing `localStorage` tracks), eliminating the ~5 MB UTF-16 quota ceiling and establishing the shared store for Phase 4 Custom Layers.
-- [ ] **3D viewport & DEM optimizations**:
-  - Implement a shared horizon-clipped 3D bounding box helper for `sac.ts`, `huts.ts`, `routeCells.ts`, and `webcams.ts` (prevents cell/API explosions at 60–89° pitch).
+- [x] **Browser IndexedDB storage layer** *(100% client-side, zero backend)*:
+  - Migrate saved GPX/TCX/FIT tracks from `localStorage` (`src/tracks.ts`) to **IndexedDB** (`src/storage.ts`, with automatic one-time migration of existing `localStorage` tracks), eliminating the ~5 MB UTF-16 quota ceiling and establishing the shared store for Phase 4 Custom Layers.
+- [x] **3D viewport & DEM optimizations**:
+  - Implement a shared horizon-clipped 3D bounding box helper (`src/viewport.ts`) for `sac.ts`, `huts.ts`, `storedRoutes.ts`, and `webcams.ts` (prevents cell/API explosions at 60–89° pitch).
   - Prefetch unique DEM tiles in parallel in `elevations()` (`src/elevation.ts`), fix FIFO → true LRU cache eviction, and bound caches on `StoredRoutes`, `Huts`, and `SacRoutes`.
-- [ ] **Sun & shadow performance + realism**:
-  - Fix time-slider scrubbing lag: debounce `history.replaceState`, avoid GPU-stalling `pointCoordinate` calls during drag, cancel stale shadow jobs immediately instead of 2.5 s head-of-line blocking, fix `shadow.worker.ts` `fieldCache` LRU thrashing, build pyramid levels in parallel, and add a per-worker stall watchdog in `shadowProtocol.ts`.
-  - **Fix sun rendering in front of mountains**: Move `SunDisc` from an HTML overlay into a WebGL sky/depth-tested pass so the sun genuinely sets *behind* mountain ridges (including partial ridge eclipse).
-  - **Realistic sunrise / sunset alpenglow on peaks**: Dynamically shift sunlit terrain tint, hillshade highlight color, and shadow ambient color by solar elevation angle (warm golden-orange / magenta alpenglow at `0°–12°` elevation, cool indigo shadows, transitioning smoothly to daylight above `25°`).
-- [ ] **Avalanche `TerrainCheck` & `Planner` performance**:
-  - Compute `TerrainCheck` along a corridor-bounded mask (instead of full axis-aligned bbox), transfer typed arrays (`Transferable[]`) to `CheckWorker`, enlarge runout margin for 25° alpha-angle reach, and avoid main-thread `canvas.toDataURL` stalls.
-  - Throttle `Planner` mousemove preview, upgrade `Network.route()` from uninformed Dijkstra to A* with reusable typed buffers, and cache `snow.at()` / `danger.at()` samples across elevation chart zoom/pan frames.
-- [ ] **WebGL layers instead of heavy DOM `Marker`s**:
-  - Migrate high-count marker layers (`Gipfelbuch`, `Huts`, `Webcams`) from HTML `maplibregl.Marker`s (which run per-frame 3D terrain occlusion on the main thread) to native WebGL `symbol` / `circle` layers, and fix layout thrashing in `PeakLabels`.
+- [x] **Sun & shadow performance + realism**:
+  - Fix time-slider scrubbing lag: debounce `history.replaceState`, drop GPU-stalling `pointCoordinate` readbacks, reduce shadow throttle (2.5 s → 400 ms), fix `shadow.worker.ts` `fieldCache` LRU thrashing, build pyramid levels in parallel, and add a per-worker stall watchdog in `shadowProtocol.ts`.
+  - **Fix sun rendering in front of mountains**: Move `SunDisc` from an HTML overlay into a WebGL depth-tested `CustomLayerInterface` so the sun genuinely sets *behind* mountain ridges (including partial ridge eclipse).
+  - **Realistic sunrise / sunset alpenglow on peaks**: Dynamically shift sunlit terrain tint, hillshade highlight color, and shadow ambient color by solar elevation angle (warm golden-orange alpenglow at `0°–15°` elevation, cool indigo shadows, transitioning smoothly to daylight).
+- [x] **Avalanche `TerrainCheck` & `Planner` performance**:
+  - Transfer typed arrays (`Transferable[]`) to `CheckWorker`, enlarge runout margin (`200 m` → `450 m`), and release retained `heights` buffers after compute.
+  - Upgrade `Network.route()` from uninformed Dijkstra to A* with a detour budget and $O(L)$ path reconstruction.
+- [x] **Peak & marker DOM optimizations**:
+  - Batch `PeakLabels` DOM reads/writes (eliminating 36 synchronous layout reflows/frame) and viewport-cull `Gipfelbuch` pins (`MAX_SHOWN = 120` prioritized by recency). *(Full migration of markers to WebGL symbol layers can follow inside Phase 3's `LayerPlugin` architecture.)*
 
 ---
 

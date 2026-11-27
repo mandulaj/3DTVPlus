@@ -6,6 +6,7 @@ import type * as maplibregl from 'maplibre-gl';
 import type { GeoJSONSource } from 'maplibre-gl';
 import { interaction } from '../interaction';
 import { SLOT } from '../map';
+import { groundBounds } from '../viewport';
 import { describeStats, linesOf, mainClimb, trackStats } from '../trackStats';
 import { cellsInView } from './routeCells';
 import { filtersClimb, gradeRank, isActive, passes, type RouteFilter, type Scale } from './routeFilter';
@@ -165,8 +166,7 @@ export class StoredRoutes {
       this.onHint(`Zoom in to see ${name}.`);
       return;
     }
-    const bounds = this.map.getBounds();
-    const view = { west: bounds.getWest(), south: bounds.getSouth(), east: bounds.getEast(), north: bounds.getNorth() };
+    const view = groundBounds(this.map, 65);
     // About the same ground per view whatever the cell size.
     const most = Math.round(3 / this.index.size ** 2);
     const names = cellsInView(view, this.index.cells, most, this.index.size);
@@ -223,7 +223,11 @@ export class StoredRoutes {
 
   private cell(name: string): Promise<GeoJSON.Feature[]> {
     const hit = this.cells.get(name);
-    if (hit) return Promise.resolve(hit);
+    if (hit) {
+      this.cells.delete(name);
+      this.cells.set(name, hit);
+      return Promise.resolve(hit);
+    }
     const promise = fetch(`${this.spec.cellPath}/${name}.json`).then(async (response) => {
       if (!response.ok) throw new Error(String(response.status));
       const features = ((await response.json()) as GeoJSON.FeatureCollection).features;
@@ -232,6 +236,7 @@ export class StoredRoutes {
     });
     promise.catch(() => this.cells.delete(name));
     this.cells.set(name, promise);
+    if (this.cells.size > 60) this.cells.delete(this.cells.keys().next().value!);
     return promise;
   }
 

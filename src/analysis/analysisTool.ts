@@ -14,7 +14,7 @@ import CheckWorker from './terrainCheck.worker?worker&inline';
 
 type Point = [lng: number, lat: number];
 const CELL = 10; // metres
-const MARGIN = 200; // metres of terrain loaded around the area: slopes above it and their runout count
+const MARGIN = 450; // metres of terrain loaded around the area: slopes above it and their runout count
 const CORRIDOR = 150; // metres either side of a route
 const MAX_CELLS = 1_500_000; // about 12 x 12 km
 const SOURCE = 'terrain-check';
@@ -265,10 +265,11 @@ export class TerrainCheck {
           reject(new Error('worker message error'));
         };
         const request: CheckRequest = { grid, conditions, mask };
-        worker.postMessage(request);
+        // Transfer heavy elevation & condition buffers zero-copy instead of structured-cloning ~12 MB.
+        worker.postMessage(request, [grid.heights.buffer, conditions.level.buffer, conditions.aspects.buffer, conditions.above.buffer]);
       });
       if (token !== this.runToken) return;
-      this.run = { west, south, east, north, grid, result, route: line };
+      this.run = { west, south, east, north, grid: { width, height, cell: CELL, heights: new Float32Array(0) }, result, route: line };
       this.paint();
       this.summarise(mask);
       this.status.textContent = this.conditionsNote;

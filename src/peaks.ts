@@ -99,18 +99,25 @@ export class PeakLabels {
     // Once they are placed, hide any that still overlap a higher peak's label.
     const order = kept.map((peak) => peak.key);
     requestAnimationFrame(() => {
-      const taken: DOMRect[] = [];
+      // Batch DOM writes → reads → writes to avoid up to 36 synchronous layout reflows per frame.
+      const candidates: { element: HTMLElement; label: Element }[] = [];
       for (const key of order) {
         const element = this.markers.get(key)?.marker.getElement();
         const label = element?.querySelector('.peak-label');
         if (!element || !label) continue;
         element.classList.remove('crowded');
-        if (element.style.opacity === '0') continue; // behind terrain: takes no room
-        const box = label.getBoundingClientRect();
+        if (element.style.opacity !== '0') candidates.push({ element, label });
+      }
+      const boxes = candidates.map(({ label }) => label.getBoundingClientRect());
+      const taken: DOMRect[] = [];
+      const crowded: HTMLElement[] = [];
+      for (let i = 0; i < candidates.length; i++) {
+        const box = boxes[i];
         const clash = taken.some((other) => box.left < other.right + 4 && box.right > other.left - 4 && box.top < other.bottom + 2 && box.bottom > other.top - 2);
-        if (clash) element.classList.add('crowded');
+        if (clash) crowded.push(candidates[i].element);
         else taken.push(box);
       }
+      for (const element of crowded) element.classList.add('crowded');
     });
   }
 

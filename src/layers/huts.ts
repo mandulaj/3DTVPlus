@@ -2,6 +2,7 @@
 // Mostly the French and western Alps and the Pyrenees.
 import * as maplibregl from 'maplibre-gl';
 import { interaction } from '../interaction';
+import { groundBounds } from '../viewport';
 import { h } from '../ui/dom';
 
 const API = 'https://www.refuges.info/api/bbox';
@@ -71,8 +72,7 @@ export class Huts {
       return;
     }
     const token = ++this.request;
-    const bounds = this.map.getBounds();
-    const view = { west: bounds.getWest(), south: bounds.getSouth(), east: bounds.getEast(), north: bounds.getNorth() };
+    const view = groundBounds(this.map, 60);
     const centre = [(view.west + view.east) / 2, (view.south + view.north) / 2];
     const wanted: { x: number; y: number; distance: number }[] = [];
     for (let x = Math.floor(view.west / CELL); x * CELL < view.east; x++) {
@@ -98,7 +98,11 @@ export class Huts {
   private cell(x: number, y: number): Promise<Hut[]> {
     const name = `${x},${y}`;
     const hit = this.cells.get(name);
-    if (hit) return Promise.resolve(hit);
+    if (hit) {
+      this.cells.delete(name);
+      this.cells.set(name, hit);
+      return Promise.resolve(hit);
+    }
     const query = new URLSearchParams({ bbox: [x * CELL, y * CELL, (x + 1) * CELL, (y + 1) * CELL].join(','), type_points: KINDS, format: 'geojson', nb_points: '250', detail: 'simple' });
     const promise = fetch(`${API}?${query}`, { signal: AbortSignal.timeout(20000) }).then(async (response) => {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -117,6 +121,7 @@ export class Huts {
     });
     promise.catch(() => this.cells.delete(name));
     this.cells.set(name, promise);
+    if (this.cells.size > 40) this.cells.delete(this.cells.keys().next().value!);
     return promise;
   }
 

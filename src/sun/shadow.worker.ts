@@ -28,10 +28,13 @@ const EARTH_RADIUS = 6371008;
 const CIRCUMFERENCE = 40075016.686;
 const PENUMBRA = Math.tan((0.35 * Math.PI) / 180); // sun half-width, slightly softened
 const GRAZING = 0.14; // cosine of incidence below which a slope starts to darken
-const CACHE_LIMIT = 40; // one tile needs up to 36
-const SHADOW_RGB = [10, 16, 48]; // cool, dark
-const SUNLIT_RGB = [255, 214, 140]; // warm tint on ground the sun reaches
-const SUNLIT_ALPHA = 0.18;
+const CACHE_LIMIT = 80; // holds multiple overlapping zoom pyramids without thrashing
+const SHADOW_DAY_RGB = [10, 16, 48]; // cool, dark
+const SHADOW_GOLDEN_RGB = [16, 22, 66]; // deeper twilight indigo
+const SUNLIT_DAY_RGB = [255, 232, 185]; // warm daylight on sunlit slopes
+const SUNLIT_GOLDEN_RGB = [255, 128, 48]; // golden-orange alpenglow at sunrise/sunset
+const SUNLIT_DAY_ALPHA = 0.18;
+const SUNLIT_GOLDEN_ALPHA = 0.36;
 const SLOPE_SHADE = 0.45; // how dark a sunlit slope may get from its angle alone: must not read as cast shadow
 
 interface DemTile {
@@ -179,7 +182,7 @@ const scratchDistance = new Float32Array(MOSAIC * MOSAIC);
 const scratchShade = new Float32Array(N * N);
 const NONE = -20000; // "no shadow surface here"
 const fieldCache = new Map<string, Field>();
-const FIELD_CACHE_LIMIT = 4;
+const FIELD_CACHE_LIMIT = 12;
 
 interface Sun {
   dirX: number; // toward the sun, grid axes (+x east, +y south)
@@ -288,9 +291,9 @@ async function compute(req: ShadowRequest): Promise<Uint8ClampedArray<ArrayBuffe
   const { z, x, y } = req;
   const out = new Uint8ClampedArray(new ArrayBuffer(N * N * 4));
   for (let i = 0; i < N * N; i++) {
-    out[i * 4] = SHADOW_RGB[0];
-    out[i * 4 + 1] = SHADOW_RGB[1];
-    out[i * 4 + 2] = SHADOW_RGB[2];
+    out[i * 4] = SHADOW_DAY_RGB[0];
+    out[i * 4 + 1] = SHADOW_DAY_RGB[1];
+    out[i * 4 + 2] = SHADOW_DAY_RGB[2];
   }
 
   const count = 2 ** z;
@@ -305,8 +308,9 @@ async function compute(req: ShadowRequest): Promise<Uint8ClampedArray<ArrayBuffe
     return out;
   }
 
-  const levels: Level[] = [];
-  for (let k = 0; k < LEVELS && (k === 0 || z - 2 * k >= MIN_LEVEL_ZOOM); k++) levels.push(await buildLevel(req.demUrl, z, x, y, k));
+  const levelIndices: number[] = [];
+  for (let k = 0; k < LEVELS && (k === 0 || z - 2 * k >= MIN_LEVEL_ZOOM); k++) levelIndices.push(k);
+  const levels = await Promise.all(levelIndices.map((k) => buildLevel(req.demUrl, z, x, y, k)));
   if (aborted.delete(req.id)) throw new AbortError();
 
   const bearing = (position.azimuth * Math.PI) / 180;
@@ -317,6 +321,7 @@ async function compute(req: ShadowRequest): Promise<Uint8ClampedArray<ArrayBuffe
   const shade = scratchShade.fill(0);
   let field: Field | null = null;
   for (let k = levels.length - 1; k >= 0; k--) {
+    if (aborted.has(req.id)) throw new AbortError();
     const level = levels[k];
     if (k === 0) {
       field = sweep(level, sun, metresPerPx, field, shade);
@@ -324,7 +329,11 @@ async function compute(req: ShadowRequest): Promise<Uint8ClampedArray<ArrayBuffe
     }
     const key = `${level.key}@${req.time}`;
     let cached = fieldCache.get(key);
-    if (!cached) {
+    if (cached) {
+      // True LRU refresh so root coarse fields are not evicted prematurely.
+      fieldCache.delete(key);
+      fieldCache.set(key, cached);
+    } else {
       cached = sweep(level, sun, metresPerPx, field, null);
       fieldCache.set(key, cached);
       if (fieldCache.size > FIELD_CACHE_LIMIT) fieldCache.delete(fieldCache.keys().next().value!);
@@ -338,8 +347,18 @@ async function compute(req: ShadowRequest): Promise<Uint8ClampedArray<ArrayBuffe
   const lightY = sun.dirY * Math.cos(altitude);
   const lightZ = Math.sin(altitude);
   const base = levels[0].grid;
-  // The warm tint fades out as the sun sinks to the horizon.
-  const warmth = SUNLIT_ALPHA * Math.min(1, Math.max(0, lightZ / 0.12));
+  // Golden-hour alpenglow: warm golden-orange light on sunlit peaks at low sun (0–15°),
+  // transitioning smoothly to daylight above 15°, and fading out cleanly below the horizon.
+  const altDeg = position.altitude;
+  const golden = Math.min(1, Math.max(0, 1 - (altDeg - 1) / 14));
+  const horizonFade = Math.min(1, Math.max(0, (altDeg + 0.8) / 2.2));
+  const sunlitR = SUNLIT_DAY_RGB[0] + (SUNLIT_GOLDEN_RGB[0] - SUNLIT_DAY_RGB[0]) * golden;
+  const sunlitG = SUNLIT_DAY_RGB[1] + (SUNLIT_GOLDEN_RGB[1] - SUNLIT_DAY_RGB[1]) * golden;
+  const sunlitB = SUNLIT_DAY_RGB[2] + (SUNLIT_GOLDEN_RGB[2] - SUNLIT_DAY_RGB[2]) * golden;
+  const shadowR = SHADOW_DAY_RGB[0] + (SHADOW_GOLDEN_RGB[0] - SHADOW_DAY_RGB[0]) * golden;
+  const shadowG = SHADOW_DAY_RGB[1] + (SHADOW_GOLDEN_RGB[1] - SHADOW_DAY_RGB[1]) * golden;
+  const shadowB = SHADOW_DAY_RGB[2] + (SHADOW_GOLDEN_RGB[2] - SHADOW_DAY_RGB[2]) * golden;
+  const warmth = (SUNLIT_DAY_ALPHA + (SUNLIT_GOLDEN_ALPHA - SUNLIT_DAY_ALPHA) * golden) * horizonFade;
   for (let j = 0; j < N; j++) {
     for (let i = 0; i < N; i++) {
       let cast = shade[j * N + i];
@@ -351,15 +370,19 @@ async function compute(req: ShadowRequest): Promise<Uint8ClampedArray<ArrayBuffe
       let facing = (lightZ - dzdx * lightX - dzdy * lightY) / Math.sqrt(1 + dzdx * dzdx + dzdy * dzdy) / GRAZING;
       facing = facing < 0 ? 0 : facing > 1 ? 1 : facing;
       facing = facing * facing * (3 - 2 * facing);
-      // Two tones: dark where the sun is hidden, warm where it shines. Mixed as premultiplied colours.
+      // Two tones: dark where the sun is hidden, warm alpenglow/sunlight where it shines.
       const dark = cast + (1 - cast) * (1 - facing) * SLOPE_SHADE;
-      const warm = (1 - dark) * warmth;
+      const warm = (1 - dark) * warmth * (0.65 + 0.35 * facing);
       const alpha = dark + warm;
       const q = (j * N + i) * 4;
-      out[q] = (SHADOW_RGB[0] * dark + SUNLIT_RGB[0] * warm) / alpha;
-      out[q + 1] = (SHADOW_RGB[1] * dark + SUNLIT_RGB[1] * warm) / alpha;
-      out[q + 2] = (SHADOW_RGB[2] * dark + SUNLIT_RGB[2] * warm) / alpha;
-      out[q + 3] = alpha * 255;
+      if (alpha > 1e-4) {
+        out[q] = (shadowR * dark + sunlitR * warm) / alpha;
+        out[q + 1] = (shadowG * dark + sunlitG * warm) / alpha;
+        out[q + 2] = (shadowB * dark + sunlitB * warm) / alpha;
+        out[q + 3] = alpha * 255;
+      } else {
+        out[q + 3] = 0;
+      }
     }
   }
   return out;

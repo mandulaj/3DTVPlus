@@ -13,6 +13,8 @@ import type { Recorded } from './tracks';
 import { MODES, controlPoints, type Mode } from './routeMath';
 import { h, toast } from './ui/dom';
 
+const APP_TITLE = document.title;
+
 type Point = [lng: number, lat: number];
 
 interface Waypoint {
@@ -151,6 +153,7 @@ export class Planner {
   private nameInput = h('input', { type: 'text', class: 'plan-name', value: 'New route', title: 'Route name (click to rename)', oninput: () => {
     this.nameEdited = true;
     this.storeSoon();
+    this.showTitle();
   } });
   private stats = h('div', { class: 'plan-stats' });
   private chart = h('div', { class: 'plan-chart' });
@@ -375,6 +378,16 @@ export class Planner {
     this.changed();
   }
 
+  /**
+   * A route clicked on the map, shown like a track: from there it can be named, saved or edited.
+   * Not while a route of one's own is being edited: that would throw it away.
+   */
+  showRoute(name: string, coords: Point[]): boolean {
+    if (this.opened && !this.readonly && this.points.length) return false;
+    this.view(name, coords);
+    return true;
+  }
+
   /** From viewing to editing the same track. */
   private edit(): void {
     if (this.recorded) toast('Editing turns this recording into a plain route: recorded times and heights no longer apply.', 'info');
@@ -410,7 +423,7 @@ export class Planner {
   private setReadonly(on: boolean): void {
     this.readonly = on;
     this.root.classList.toggle('readonly', on);
-    this.nameInput.readOnly = on;
+    this.nameInput.readOnly = on && this.trackId !== null; // a track not in the list yet can be named before saving
   }
 
   load(name: string, coords: Point[], trackId: string | null = null): void {
@@ -437,6 +450,7 @@ export class Planner {
   close(): void {
     const wasOpen = this.opened;
     this.opened = false;
+    this.showTitle();
     this.setDrawing(null);
     if (wasOpen) this.options.onClose();
     this.root.classList.remove('open');
@@ -942,7 +956,13 @@ export class Planner {
   }
 
   /** Statistics box: the selected part of the profile if there is one, else the whole route. */
+  /** The open route names the browser tab (and so bookmarks and history entries). */
+  private showTitle(): void {
+    document.title = this.opened && this.hasRoute ? `${this.name()} – ${APP_TITLE}` : APP_TITLE;
+  }
+
   private renderStats(): void {
+    this.showTitle();
     const p = this.profile;
     if (!p) return;
     const selected = this.selection;

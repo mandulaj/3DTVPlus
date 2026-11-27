@@ -10,6 +10,7 @@ import { unofficial } from '../unofficial';
 import type { RouteFilter } from '../layers/routeFilter';
 import type { RouteSpec } from '../layers/storedRoutes';
 import { routeFilterUi, type RouteFilterUi } from './routeFilterUi';
+import { REPORT_AGES, REPORT_SPANS } from '../layers/gipfelbuch';
 import { h, info, slider } from './dom';
 
 export interface SlfState {
@@ -239,6 +240,7 @@ export class Panel {
       h('div', { class: 'group-title' }, 'Map layers'),
       ...this.overlayRowsFor('ski'),
       ...this.hutRow(),
+      ...this.reportRow(),
     );
   }
 
@@ -249,7 +251,7 @@ export class Panel {
   }
 
   private buildHiking(): HTMLElement {
-    return this.topic('hiking', '🥾 Hiking & mountaineering', false, ...this.overlayRowsFor('hiking'), this.sacPart('hiking'), ...this.hutRow());
+    return this.topic('hiking', '🥾 Hiking & mountaineering', false, ...this.overlayRowsFor('hiking'), this.sacPart('hiking'), ...this.hutRow(), ...this.reportRow());
   }
 
   private buildCycling(): HTMLElement {
@@ -328,6 +330,44 @@ export class Panel {
 
   showHutHint(hint: string | null): void {
     for (const element of this.hutHints) element.textContent = hint ?? '';
+  }
+
+  // ── Condition reports (gipfelbuch.ch) ──
+
+  onReports: (on: boolean, days: number) => void = () => {};
+  private reportBoxes: HTMLInputElement[] = [];
+  private reportSpans: HTMLSelectElement[] = [];
+  private reportHints: HTMLElement[] = [];
+
+  /** Like the hut switch, this appears under several topics and the copies stay in step. */
+  private reportRow(): HTMLElement[] {
+    const change = () => {
+      this.showReports(box.checked, Number(span.value));
+      this.onReports(box.checked, Number(span.value));
+    };
+    const box = h('input', { type: 'checkbox', onchange: change });
+    const span = h('select', { title: 'Show reports since', onchange: change }, ...REPORT_SPANS.map((s) => h('option', { value: String(s.days), selected: s.days === 7 }, s.name)));
+    const hint = h('div', { class: 'muted' });
+    const legend = h('div', { class: 'report-legend' }, ...REPORT_AGES.map((age) => h('span', {}, h('i', { style: `background:${age.colour}` }), age.name)));
+    this.reportBoxes.push(box);
+    this.reportSpans.push(span);
+    this.reportHints.push(hint);
+    return [
+      h('label', { class: 'row' }, box, h('span', {}, 'Condition reports (gipfelbuch.ch)'), info('Recent tour reports from gipfelbuch.ch as pins, coloured by how recent they are. Click one for a short excerpt and a link to the full report. The list is a copy stored with this site and only as fresh as its last refresh (shown below when switched on).')),
+      h('div', { class: 'row sub-option' }, h('span', { class: 'muted' }, 'Since'), span),
+      legend,
+      hint,
+    ];
+  }
+
+  showReports(on: boolean, days?: number): void {
+    for (const box of this.reportBoxes) box.checked = on;
+    if (days) for (const span of this.reportSpans) span.value = String(days);
+    this.countActive();
+  }
+
+  showReportHint(hint: string | null): void {
+    for (const element of this.reportHints) element.textContent = hint ?? '';
   }
 
   // ── SAC routes ──

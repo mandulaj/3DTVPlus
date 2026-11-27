@@ -1335,6 +1335,17 @@ body.weather-on .search {
 /* Webcam markers and the preview in their popup. */
 .webcam { border: 1.5px solid #fff; background: #1c2330; border-radius: 50%; width: 26px; height: 26px; padding: 0; font-size: 13px; line-height: 1; cursor: pointer; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4); }
 .webcam:hover { background: #1f6feb; }
+/* Condition reports (gipfelbuch.ch): pins coloured by age. */
+.report-pin { position: relative; border: 2px solid #fff; background: var(--age, #8d99ae); border-radius: 50% 50% 50% 4px; width: 30px; height: 30px; padding: 0; font-size: 15px; line-height: 1; cursor: pointer; box-shadow: 0 1px 5px rgba(0, 0, 0, 0.55); }
+.report-pin:hover { filter: brightness(1.15); transform: scale(1.12); }
+.report-count { position: absolute; top: -7px; right: -8px; min-width: 15px; padding: 0 3px; border-radius: 8px; background: #1c2330; color: #fff; font-size: 10px; line-height: 15px; }
+.report-legend { display: flex; flex-wrap: wrap; gap: 2px 8px; font-size: 11px; margin: 2px 0 2px 22px; }
+.report-legend span { display: inline-flex; align-items: center; gap: 3px; }
+.report-legend i, .report-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; }
+.report-dot { margin-right: 6px; }
+.popup.reports { max-height: 50vh; overflow-y: auto; }
+.popup.reports .report + .report { border-top: 1px solid rgba(128, 128, 128, 0.35); margin-top: 8px; padding-top: 8px; }
+.report-text { margin: 6px 0; font-size: 12.5px; line-height: 1.35; }
 .webcam-preview { display: block; width: 100%; max-width: 320px; border-radius: 6px; margin: 6px 0 2px; }
 
 /* "Plan a route" and "Import track" side by side. */

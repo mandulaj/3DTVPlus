@@ -1,5 +1,6 @@
 // Click on a swisstopo ski or snowshoe route: look the route up at geo.admin.ch and show its
 // details with a link to the SAC route portal (the route network on these layers is the SAC's).
+import { previewRoute } from '../routePreview';
 import type * as maplibregl from 'maplibre-gl';
 import type { GeoJSONSource } from 'maplibre-gl';
 import { interaction } from '../interaction';
@@ -103,6 +104,7 @@ export function enableRouteInfo(map: maplibregl.Map, layers: LayerManager, popup
         .setHTML(`<div class="popup"><h3>${escapeHtml(titleOf(p) || kind)}</h3><div class="muted">${kind}${p.name_en ? `: ${escapeHtml(p.name_en)}` : ''}</div><table>${rows}</table><div class="muted" data-track title="Measured along the highlighted line, from its lower to its higher end"></div>${link}${others}<div class="muted">Source: swisstopo / SAC</div></div>`)
         .addTo(map);
       showHighlight(r.geometry); // again: opening the popup closes the previous one, which clears the marking
+      void previewRoute(titleOf(p) || kind, linesOf(r.geometry));
       for (const option of popup.getElement()?.querySelectorAll<HTMLElement>('[data-option]') ?? []) option.addEventListener('click', () => void show(Number(option.dataset.option)));
       const stats = await trackStats(linesOf(r.geometry)).catch(() => null);
       const slot = popup.getElement()?.querySelector('[data-track]');

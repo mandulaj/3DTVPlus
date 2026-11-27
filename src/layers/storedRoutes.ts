@@ -1,6 +1,7 @@
 // Routes kept as files next to the page (public/data/…), cut into cells and loaded for the area
 // in view: Camptocamp, Skitourenguru's route network, swisstopo's snowshoe routes. What differs
 // between the sources (where the files are, how a route is described) is in a RouteSpec.
+import { previewRoute } from '../routePreview';
 import type * as maplibregl from 'maplibre-gl';
 import type { GeoJSONSource } from 'maplibre-gl';
 import { interaction } from '../interaction';
@@ -286,6 +287,9 @@ function openPopup(map: maplibregl.Map, popup: maplibregl.Popup, event: maplibre
     for (const source of sources) source.highlight(entries.filter((entry) => entry.source === source).map((entry) => Number(entry.route.id)));
   };
   mark(found); // after opening: that closes the previous popup, which clears the marking
+  const preview = (entry: (typeof found)[number]) => void previewRoute(entry.source.spec.title(entry.route.properties ?? {}), linesOf(entry.route.geometry));
+  const firstLine = found.find((entry) => entry.route.geometry.type !== 'Point');
+  if (firstLine) preview(firstLine);
   const options = [...(popup.getElement()?.querySelectorAll<HTMLElement>('.route-option') ?? [])];
   for (const option of options) {
     option.addEventListener('click', (click) => {
@@ -293,6 +297,8 @@ function openPopup(map: maplibregl.Map, popup: maplibregl.Popup, event: maplibre
       const alone = !option.classList.contains('on');
       for (const other of options) other.classList.toggle('on', alone && other === option);
       mark(alone ? found.filter((entry) => key(entry) === option.dataset.route) : found);
+      const chosen = found.find((entry) => key(entry) === option.dataset.route);
+      if (alone && chosen && chosen.route.geometry.type !== 'Point') preview(chosen);
     });
   }
   void (async () => {

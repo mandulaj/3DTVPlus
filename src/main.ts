@@ -11,7 +11,7 @@ import { enableContextMenu } from './contextMenu';
 import { WeatherCard } from './weatherCard';
 import { enableSearch } from './search';
 import { Weather } from './weather';
-import { decodeShare, decodeTrack, encodeShare, encodeTrack, type SharedView } from './share';
+import { decodeShare, decodeTrack, encodeShare, encodeTrack, linkName, type SharedView } from './share';
 import { parseTrack } from './trackFiles';
 import { DEFAULT_BASE, byId } from './layers/catalog';
 import { LayerManager } from './layers/manager';
@@ -24,6 +24,8 @@ import { unofficial } from './unofficial';
 import { enableRouteInfo } from './layers/routes';
 import { Skitourenguru } from './layers/skitourenguru';
 import { Huts } from './layers/huts';
+import { Gipfelbuch } from './layers/gipfelbuch';
+import { routePreview } from './routePreview';
 import { ROUTE_SOURCES } from './layers/routeSources';
 import { StoredRoutes } from './layers/storedRoutes';
 import { Webcams } from './layers/webcams';
@@ -64,6 +66,8 @@ for (const source of routeSources.values()) source.onError = toast;
 const c2c = routeSources.get('c2c')!;
 const huts = new Huts(map, slf.popup);
 huts.onError = toast;
+const reports = new Gipfelbuch(map, slf.popup);
+reports.onError = toast;
 // The planner follows SAC lines and the stored routes alike; the joined list is rebuilt only when one of them changes.
 let routeLines: { parts: unknown[]; all: [number, number][][] } | null = null;
 function routableLines(): [number, number][][] {
@@ -123,6 +127,7 @@ function saveState(): void {
     // other stored route collections and huts
     rs: [...routeSources].filter(([id, source]) => id !== 'c2c' && source.enabled).map(([id]) => id).join(',') || null,
     huts: huts.enabled ? '1' : null,
+    gb: reports.enabled ? String(reports.days) : null,
     // route filters: "ski_tour:1~2~~1500,c2c:~3~~"
     rf: [...[...sac.filters].map(([id, filter]) => `${id}:${encodeFilter(filter)}`), ...[...routeSources].filter(([, source]) => source.filter).map(([id, source]) => `${id}:${encodeFilter(source.filter!)}`)].join(',') || null,
     terrain:
@@ -197,6 +202,7 @@ map.once('load', async () => {
   tracks.onShare = (name, coords) => void shareTrack(name, coords);
   void openSharedTrack(planner);
   tracks.onEdit = (id, name, coords) => planner.load(name, coords, id);
+  routePreview.open = (name, line) => void planner.showRoute(name, line);
   tracks.onView = (id, name, coords, recorded) => planner.view(name, coords, id, recorded);
   slf.onSnowChange = () => planner.refresh();
   slf.onBulletinChange = () => planner.refresh();
@@ -254,6 +260,17 @@ map.once('load', async () => {
     panel.showHuts(true);
     huts.setEnabled(true);
   }
+  reports.onHint = (hint) => panel.showReportHint(hint);
+  panel.onReports = (on, days) => {
+    reports.days = days;
+    reports.setEnabled(on);
+    saveState();
+  };
+  if (Number(hash.get('gb'))) {
+    reports.days = Number(hash.get('gb'));
+    panel.showReports(true, reports.days);
+    reports.setEnabled(true);
+  }
   if (hash.get('sun')) sunControls.setEnabled(true);
 
   const mapyLogo = h('a', { class: 'mapy-logo', href: 'https://mapy.com/', target: '_blank', rel: 'noopener', title: 'Map by Mapy.com' }, h('img', { src: 'https://api.mapy.com/img/api/logo.svg', alt: 'Mapy.com' }));
@@ -283,7 +300,9 @@ async function shareTrack(name: string, coords: [number, number][]): Promise<voi
   const view = [...params.entries()].map(([k, v]) => `${k}=${k === 'map' ? v : encodeURIComponent(v)}`).join('&');
   // Map position, layers and track are compressed together into one parameter.
   const packed = await encodeShare({ hash: view, name, coords });
-  const link = `${location.origin}${location.pathname}#s=${packed.text}`;
+  // The name leads the link in readable form (the viewer ignores it: the packed part carries the name).
+  const label = linkName(name);
+  const link = `${location.origin}${location.pathname}#${label ? `${label}&` : ''}s=${packed.text}`;
   const size = link.length < 1000 ? `${link.length} characters` : `${(link.length / 1000).toFixed(1)} kB`;
   const accuracy = `track accurate to about ${Math.round(packed.tolerance)} m`;
   try {

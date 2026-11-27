@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decodeShare, decodeTrack, encodeShare, encodeTrack } from '../src/share';
+import { decodeShare, decodeTrack, encodeShare, encodeTrack, linkName } from '../src/share';
 import { distanceToLine, metres, windingTrack } from './helpers';
 
 describe('track packing', () => {
@@ -55,5 +55,20 @@ describe('whole-view packing', () => {
 
   it('refuses a plain track text', async () => {
     await expect(decodeShare((await encodeTrack(windingTrack(2))).text)).rejects.toThrow();
+  });
+});
+
+describe('readable link name', () => {
+  it('turns a file name into plain words', () => {
+    expect(linkName('Piz Buin (ski).gpx')).toBe('Piz-Buin-ski');
+    expect(linkName('Lötschenlücke – Hollandiahütte')).toBe('Lotschenlucke-Hollandiahutte');
+  });
+  it('is empty when nothing readable is left, and never long', () => {
+    expect(linkName('山')).toBe('');
+    expect(linkName('a '.repeat(100)).length).toBeLessThanOrEqual(60);
+  });
+  it('does not disturb reading the link', () => {
+    const params = new URLSearchParams(`${linkName('Piz Buin')}&s=abc`);
+    expect(params.get('s')).toBe('abc');
   });
 });

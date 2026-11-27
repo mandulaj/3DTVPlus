@@ -1,6 +1,7 @@
 // SAC route portal: route lines for every discipline, loaded for the area in view from the portal's
 // own public map service, with links back to the portal. Content © Swiss Alpine Club SAC; full route
 // descriptions stay on sac-cas.ch (where a membership login applies).
+import { previewRoute } from '../routePreview';
 import type * as maplibregl from 'maplibre-gl';
 import type { GeoJSONSource } from 'maplibre-gl';
 import { interaction } from '../interaction';
@@ -316,6 +317,15 @@ export class SacRoutes {
         // All listed routes are marked; clicking one in the list marks that one alone (again: all).
         const listed = ((data.results ?? []) as any[]).map((route) => Number(route.id));
         this.highlight(listed);
+        // The route (the first listed, then whichever is picked) also opens in the track viewer.
+        const names = new Map(((data.results ?? []) as any[]).map((route) => [Number(route.id), [text(route.destination_poi?.display_name), text(route.title)].filter(Boolean).join(': ') || 'SAC route']));
+        const preview = (id: number) => {
+          const lines = this.drawn
+            .filter((f) => Number(f.properties?.route_id) === id && !f.properties?.alternative && f.geometry.type === 'LineString')
+            .map((f) => (f.geometry as GeoJSON.LineString).coordinates as [number, number][]);
+          if (lines.length) void previewRoute(names.get(id) ?? 'SAC route', lines);
+        };
+        if (listed.length) preview(listed[0]);
         const options = [...(this.popup.getElement()?.querySelectorAll<HTMLElement>('.route-option') ?? [])];
         for (const option of options) {
           option.addEventListener('click', (click) => {
@@ -323,6 +333,7 @@ export class SacRoutes {
             const alone = !option.classList.contains('on');
             for (const other of options) other.classList.toggle('on', alone && other === option);
             this.highlight(alone ? [Number(option.dataset.route)] : listed);
+            if (alone) preview(Number(option.dataset.route));
           });
         }
         void this.measure(ids);

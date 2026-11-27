@@ -1,0 +1,39 @@
+# Refreshes the stored copy of recent gipfelbuch.ch condition reports on the published page.
+# Only data/gipfelbuch.json on the gh-pages branch changes; the page itself is published with
+# `npm run deploy`.
+name: Refresh condition reports
+on:
+  schedule:
+    - cron: '17 5,11,17 * * *' # three times a day (UTC)
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          path: main
+      - uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: pages
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Fetch reports
+        run: |
+          mkdir -p main/public/data
+          # Start from the published list: only reports not seen before are looked up.
+          cp pages/data/gipfelbuch.json main/public/data/gipfelbuch.json 2>/dev/null || true
+          node main/scripts/fetch-gipfelbuch.mjs 30
+          cp main/public/data/gipfelbuch.json pages/data/gipfelbuch.json
+      - name: Publish
+        working-directory: pages
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/gipfelbuch.json
+          git diff --cached --quiet || (git commit -q -m "Refresh condition reports" && git push -q)

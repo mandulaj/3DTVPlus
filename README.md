@@ -48,6 +48,13 @@ It only pulls tiles and data from the public services listed below.
   `node scripts/fetch-snowshoe.mjs`.
 - **Huts**: staffed huts, shelters and lodgings from refuges.info, asked live for the area in view (mainly the
   French and western Alps).
+- **Condition reports**: recent tour reports from gipfelbuch.ch as pins coloured by age (today … older), with
+  a "since" filter (3 days to 1 month). Click a pin for a short excerpt and a link to the report. gipfelbuch.ch
+  cannot be asked from a web page, so the list is a stored copy: `node scripts/fetch-gipfelbuch.mjs` refreshes
+  it, and `.github/workflows/gipfelbuch.yml` does so three times a day on the published page.
+- **Route preview**: clicking a route line (SAC, swisstopo ski/snowshoe, Skitourenguru networks, Camptocamp)
+  opens it in the track viewer: profile, statistics, snow/slope/danger colouring. From there name it, save it
+  to your tracks or press Edit to use it as the start of your own tour.
 - **Menu by topic**: Ski touring & snowshoe, Snow & avalanches, Hiking & mountaineering, Cycling, Weather &
   webcams, Terrain, More maps. Each section shows how many things are switched on in it; a preset switches on
   everything that belongs to its activity and opens its section.
@@ -174,6 +181,10 @@ unchanged apart from conversion to longitude/latitude (rounded to about 1 m) and
   is under a private licence and is not included.
 - `routes/ch-snowshoe/`: snowshoe routes © swisstopo / SAC, swisstopo open data.
 - `webcams.json`: © OpenStreetMap contributors, ODbL.
+- `gipfelbuch.json`: titles, dates, authors, positions and a short excerpt (at most 220 characters) of public
+  condition reports on [gipfelbuch.ch](https://www.gipfelbuch.ch/verhaeltnisse/uebersicht), each linking to the
+  full report there. The reports belong to their authors and gipfelbuch.ch; no licence for reuse is stated, so
+  this is meant for personal use. Remove the file and the workflow if that is not acceptable.
 
 The Skitourenguru repository also says its data may be used for private, non-commercial purposes only. This
 viewer is a private, non-commercial project; whoever reuses it otherwise must check those terms, and whether

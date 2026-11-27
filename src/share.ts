@@ -165,3 +165,18 @@ export async function decodeShare(text: string): Promise<SharedView> {
   const rest = raw.subarray(2 + length);
   return { hash: String(header.h ?? ''), name: String(header.n ?? ''), coords: rest.length ? unpack(rest) : null };
 }
+
+/**
+ * A track name as a readable piece of a link ("Piz Buin (ski).gpx" becomes "Piz-Buin-ski"), so the
+ * link says what it shows wherever it is pasted. Empty if nothing readable is left.
+ */
+export function linkName(name: string): string {
+  return name
+    .replace(/\.(gpx|tcx|fit|kml|geojson)$/i, '')
+    .normalize('NFKD')
+    .replace(/\p{M}/gu, '') // accents off: plain letters survive every chat program's link detection
+    .replace(/[^A-Za-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60)
+    .replace(/-+$/, '');
+}
